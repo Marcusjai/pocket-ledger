@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="zh-Hant-HK">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#122a2a"><meta name="description" content="本機優先嘅個人支出紀錄。快速記現金，同步 Google Sheet。">
+  <meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="referrer" content="no-referrer">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' blob:; connect-src 'self' https://script.google.com https://script.googleusercontent.com; object-src 'none'; base-uri 'self'; form-action 'self'">
+  <title>袋住記 · Pocket Ledger</title><link rel="manifest" href="./manifest.webmanifest"><link rel="apple-touch-icon" href="./icons/icon-192.png"><link rel="icon" href="./icons/icon.svg" type="image/svg+xml"><link rel="stylesheet" href="./styles.css">
+  <script defer src="./engine.js"></script><script defer src="./store.js"></script><script defer src="./app.js"></script>
+</head>
+<body>
+  <div class="shell">
+    <header><a class="brand" href="#dashboard" aria-label="袋住記主頁"><span class="brand-icon">記</span><span>袋住記<small>POCKET LEDGER</small></span></a><button id="sync" class="quiet">同步 ↻</button></header>
+    <div id="status" class="status" role="status">正在讀取本機記錄…</div>
+    <main>
+      <section id="dashboard" class="view">
+        <div class="page-title"><div><p class="eyebrow">每一筆，都有數。</p><h1>支出一覽</h1></div><label class="month-label"><span class="sr-only">月份</span><input type="month" id="month" aria-label="月份"></label></div>
+        <div class="overview"><article class="total-card"><p>本月支出 <span id="month-caption"></span></p><div class="money"><span>HK$</span><strong id="month-total">0.00</strong></div><div class="total-footer"><span id="month-count">0 筆記錄</span><span>港幣 · 香港時間</span></div></article><article class="today-card"><p>今日支出</p><strong id="today-total">$0.00</strong><button class="primary" id="quick-cash">＋ 記現金</button></article></div>
+        <div class="dashboard-grid"><article class="panel"><div class="panel-title"><h2>分類分佈</h2><span id="category-count"></span></div><div id="categories"></div></article><article class="panel"><div class="panel-title"><h2>每日支出</h2><span>本月</span></div><div id="daily"></div></article></div>
+        <article class="panel transactions"><div class="panel-title"><h2>本月記錄</h2><span id="list-count"></span></div><div id="transaction-list"></div></article>
+      </section>
+      <section id="add" class="view" hidden>
+        <div class="page-title"><div><p class="eyebrow">幾秒記低，之後慢慢睇。</p><h1>記一筆</h1></div><span class="pill">離線可用</span></div>
+        <form id="entry-form" class="panel entry-panel">
+          <label class="amount-label" for="amount">支出金額 · HKD</label><div class="amount-entry"><span>$</span><input id="amount" name="amount" type="text" inputmode="decimal" autocomplete="off" placeholder="0.00" required aria-label="支出金額"></div>
+          <fieldset class="source-picker"><legend>付款方式</legend><label><input type="radio" name="source" value="Cash" checked><span>現金</span></label><label><input type="radio" name="source" value="ApplePay"><span>Apple Pay</span></label><label><input type="radio" name="source" value="Octopus"><span>八達通</span></label></fieldset>
+          <label for="entry-category">分類</label><select id="entry-category"><option value="Auto">自動分類／稍後處理</option></select>
+          <div class="fast-categories" aria-label="常用分類"><button type="button" data-category="Dining">餐飲</button><button type="button" data-category="Transport">交通</button><button type="button" data-category="Groceries">日用品</button><button type="button" data-category="Shopping">購物</button></div>
+          <label for="note">備註 <span class="optional">可留空，例如：午餐</span></label><input id="note" maxlength="500" autocomplete="off" placeholder="記低少少就夠">
+          <details><summary>商戶及交易時間</summary><label for="merchant">商戶 <span class="optional">可留空</span></label><input id="merchant" maxlength="160" autocomplete="off"><label for="entry-time">交易時間（香港時間）</label><input id="entry-time" type="datetime-local" step="1"></details>
+          <button type="submit" class="primary save-button">儲存記錄</button><p class="hint">先儲存喺呢部裝置；連接 Google Sheet 後再同步。</p>
+        </form>
+      </section>
+      <section id="review" class="view" hidden><div class="page-title"><div><p class="eyebrow">幫下一次，自動分得更準。</p><h1>待分類</h1></div><span class="pill" id="review-count">0 筆</span></div><div id="review-list"></div></section>
+      <section id="settings" class="view" hidden>
+        <div class="page-title"><div><p class="eyebrow">資料由你掌握。</p><h1>設定與備份</h1></div></div>
+        <form id="settings-form" class="panel settings-panel"><h2>連接 Google Sheet</h2><p class="hint">未連接都可以記帳。首次設定請參閱壓縮檔內嘅 SETUP 指引。</p><label for="endpoint">Apps Script 網址</label><input id="endpoint" type="url" placeholder="https://script.google.com/macros/s/…/exec" autocomplete="off"><label for="token">私人連接密碼</label><input id="token" type="password" autocomplete="off" minlength="32" placeholder="Script Properties 內嘅 API_TOKEN"><p class="hint">密碼會存喺呢部裝置，唔會包括喺匯出備份。請只用自己嘅裝置。</p><button class="primary" type="submit">儲存連接設定</button><button type="button" id="disconnect" class="quiet">中斷連接</button></form>
+        <article id="conflict-panel" class="panel" hidden><h2>分類有衝突</h2><p id="conflict-description"></p><button id="keep-local" class="primary">保留本機分類</button><button id="keep-remote" class="quiet">採用雲端分類</button></article>
+        <article class="panel"><h2>備份與還原</h2><p class="hint">定期下載備份。清除瀏覽器資料或移除 App，可能會刪除未同步記錄。</p><div class="actions"><button id="export" class="secondary">下載備份 JSON</button><button id="csv" class="secondary">匯出 CSV</button><label class="file-button secondary">還原 JSON<input id="import" type="file" accept="application/json,.json"></label></div><p class="hint">還原會合併記錄；同一 ID 不會重複，並會排隊同步。</p></article>
+        <article class="panel"><h2>iPhone 快速入口</h2><p>在 Safari 開啟 App，分享 → 加入主畫面。捷徑「打開 URL」使用以下地址，可直接開啟現金輸入：</p><code id="cash-link"></code><p class="hint">可指派到動作按鈕，或用 Siri 執行呢個捷徑。語音直接入帳及 Wallet 自動化設定見 SHORTCUTS 指引。</p><p id="offline-ready" class="hint">正在準備離線使用…</p></article>
+      </section>
+    </main>
+    <nav aria-label="主要選單"><button data-view="dashboard" class="active"><span aria-hidden="true">▥</span>總覽</button><button data-view="add"><span aria-hidden="true">＋</span>記一筆</button><button data-view="review"><span aria-hidden="true">☷</span>待分類 <b id="review-badge" hidden>0</b></button><button data-view="settings"><span aria-hidden="true">⚙</span>設定</button></nav>
+  </div>
+  <div id="toast" class="toast" role="status" hidden></div>
+  <dialog id="category-dialog"><form id="category-form"><h2>修改分類</h2><p id="edit-merchant"></p><label for="edit-category">分類</label><select id="edit-category"></select><label class="check-label"><input id="remember" type="checkbox">下次遇到呢間商戶，使用此分類</label><div class="actions"><button type="submit" class="primary">儲存分類</button><button type="button" id="close-dialog" class="quiet">取消</button></div></form></dialog>
+  <noscript>請開啟 JavaScript 以使用袋住記。</noscript>
+</body>
+</html>
