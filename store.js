@@ -4,14 +4,14 @@
   root.LedgerStore = api;
 })(typeof globalThis !== 'undefined' ? globalThis : this, function (E) {
   'use strict';
-  const initial = () => ({ schema: 1, transactions: [], rules: [], outbox: [], settings: { endpoint: '', token: '' }, lastSync: '', conflict: null, syncLease: null });
+  const initial = () => ({ schema: 2, transactions: [], rules: [], outbox: [], settings: { endpoint: '', token: '' }, lastSync: '', conflict: null, rejection: null, syncLease: null });
   const uid = () => crypto.randomUUID();
   let connection;
   async function open() {
     if (connection) return connection;
     connection = await new Promise((resolve, reject) => {
-      const r = indexedDB.open('pocket-ledger-v1', 1);
-      r.onupgradeneeded = () => r.result.createObjectStore('state');
+      const r = indexedDB.open('pocket-ledger-v1', 2);
+      r.onupgradeneeded = () => { if (!r.result.objectStoreNames.contains('state')) r.result.createObjectStore('state'); };
       r.onsuccess = () => resolve(r.result);
       r.onerror = () => reject(r.error);
       r.onblocked = () => reject(new Error('請關閉其他記帳分頁再試'));
@@ -29,6 +29,7 @@
       request.onsuccess = () => {
         try {
           const state = request.result || initial();
+          state.schema = 2;
           result = fn(state);
           store.put(state, 'ledger');
         } catch (e) { error = e; tx.abort(); }
@@ -42,7 +43,7 @@
     const result = E.insert(state.transactions, input, state.rules);
     if (result.status === 'inserted') {
       state.transactions.push(result.transaction);
-      state.outbox.push({ action: 'create', operationId: uid(), transaction: E.inputOf(result.transaction) });
+      state.outbox.push({ action: E.isReimbursement(result.transaction) ? 'reimburse' : 'create', operationId: uid(), transaction: E.inputOf(result.transaction) });
     }
     return result;
   }
@@ -50,6 +51,7 @@
     if (!E.CATEGORIES.includes(category)) throw new Error('分類不正確');
     const r = state.transactions.find(t => t.id === id);
     if (!r) throw new Error('搵唔到交易');
+    if (E.isReimbursement(r)) throw new Error('請修改原支出分類；還款會自動跟隨');
     state.outbox.push({ action: 'categorize', operationId: uid(), id, version: r.version, category, remember: Boolean(remember) });
     r.category = category; r.needsReview = category === 'Uncategorized'; r.version++;
     if (remember && r.merchantKey) {
@@ -63,10 +65,17 @@
     state.rules.push({ merchantKey: rule.merchantKey, category: rule.category });
     state.outbox.push({ action: 'rule', operationId: uid(), merchantKey: rule.merchantKey, category: rule.category });
   }
-  const target = op => op.action === 'create' ? op.transaction.id : op.id;
+  const target = op => op.transaction ? op.transaction.id : op.id;
   function acknowledge(state, op, remote) {
     state.outbox = state.outbox.filter(x => x.operationId !== op.operationId);
     const oldId = target(op);
+    if (oldId !== remote.id && !E.isReimbursement(remote)) {
+      for (const r of state.transactions) if (E.isReimbursement(r) && r.expenseId === oldId) {
+        r.expenseId = remote.id;
+        r.fingerprint = E.prepare(E.inputOf(r)).fingerprint;
+      }
+      for (const next of state.outbox) if (next.action === 'reimburse' && next.transaction.expenseId === oldId) next.transaction.expenseId = remote.id;
+    }
     const pending = state.outbox.filter(x => target(x) === oldId);
     let version = remote.version;
     for (const next of pending) {
@@ -98,6 +107,34 @@
     else if (op) acknowledge(state, op, c.transaction);
     state.conflict = null;
   }
+  const REJECTED_REIMBURSEMENT_CODES = ['OVER_REIMBURSEMENT', 'EXPENSE_NOT_FOUND', 'INVALID_EXPENSE'];
+  function discardRejected(state) {
+    const rejection = state.rejection;
+    if (!rejection || !REJECTED_REIMBURSEMENT_CODES.includes(rejection.code)) throw new Error('沒有已確認被拒絕嘅還款');
+    if (state.syncLease && state.syncLease.expires > Date.now()) throw new Error('請等同步完成');
+    const op = state.outbox.find(x => x.operationId === rejection.operationId);
+    if (!op || op.action !== 'reimburse') throw new Error('搵唔到被拒絕嘅還款');
+    state.outbox = state.outbox.filter(x => x.operationId !== op.operationId);
+    state.transactions = state.transactions.filter(r => r.id !== op.transaction.id);
+    state.rejection = null;
+  }
+  function restore(state, data) {
+    if (![1, 2].includes(data.schema) || !Array.isArray(data.transactions) || data.transactions.length > 10000 || !Array.isArray(data.rules) || data.rules.length > 10000) throw new Error('備份格式不正確');
+    const next = structuredClone(state), ids = new Map();
+    let count = 0;
+    // Restore dependencies first, even when a backup is ordered newest-first.
+    for (const reimbursement of [false, true]) for (const input of data.transactions) {
+      if (!input || typeof input !== 'object') throw new Error('備份記錄格式不正確');
+      if (E.isReimbursement(input) !== reimbursement) continue;
+      const record = reimbursement ? { ...input, expenseId: ids.get(input.expenseId) || input.expenseId } : input;
+      const result = add(next, record);
+      ids.set(input.id, result.transaction.id);
+      if (result.status === 'inserted') count++;
+    }
+    for (const rule of data.rules) rememberRule(next, rule);
+    Object.assign(state, next);
+    return count;
+  }
   async function sync(io) {
     const owner = uid();
     let acquired = false;
@@ -109,8 +146,9 @@
       const config = (await io.read()).settings;
       if (!config.endpoint || !config.token) throw new Error('先喺設定連接 Google Sheet');
       if ((await io.read()).conflict) throw new Error('請先處理分類衝突');
+      if ((await io.read()).rejection) throw new Error('有還款未能入帳，請到設定處理');
       const send = async op => {
-        const response = await io.send(config, op);
+        const response = await io.send(config, { ...op, protocolVersion: 2 });
         if (!response || typeof response.ok !== 'boolean') throw new Error('伺服器回應不正確，記錄仍保留喺本機');
         return response;
       };
@@ -125,8 +163,17 @@
         });
         const response = await send(op);
         if (!response.ok) {
-          if (response.error.code === 'VERSION_CONFLICT') await io.mutate(s => { s.conflict = { operationId: op.operationId, transaction: response.transaction }; });
-          throw new Error(response.error.message);
+          const code = response.error?.code;
+          if (code === 'VERSION_CONFLICT') await io.mutate(s => { s.conflict = { operationId: op.operationId, transaction: response.transaction }; });
+          if (op.action === 'reimburse' && REJECTED_REIMBURSEMENT_CODES.includes(code)) {
+            await io.mutate(s => { s.rejection = { operationId: op.operationId, code, message: response.error.message }; });
+            try {
+              const snapshot = await send({ action: 'list' });
+              if (snapshot.ok && Array.isArray(snapshot.transactions) && Array.isArray(snapshot.rules)) await io.mutate(s => merge(s, snapshot));
+            } catch (_) { /* The confirmed rejection remains recoverable even if the refresh fails. */ }
+          }
+          if (op.action === 'reimburse' && code === 'INVALID_ACTION') throw new Error('Google 後端未支援還款。請更新三個 .gs 檔並部署新版本；記錄仍留喺本機');
+          throw new Error(response.error?.message || '同步失敗，記錄仍留喺本機');
         }
         if (op.action === 'rule') {
           if (!response.rule || response.rule.merchantKey !== op.merchantKey || response.rule.category !== op.category) throw new Error('分類規則未獲確認，請重試');
@@ -167,5 +214,5 @@
       throw err;
     } finally { clearTimeout(timeout); }
   }
-  return { initial, uid, read, mutate, add, categorize, rememberRule, acknowledge, merge, resolveConflict, sync, send, validEndpoint };
+  return { initial, uid, read, mutate, add, categorize, rememberRule, acknowledge, merge, resolveConflict, discardRejected, restore, sync, send, validEndpoint };
 });
