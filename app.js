@@ -93,6 +93,10 @@ function render() {
     const op = state.outbox.find(x => x.operationId === state.rejection.operationId);
     $('rejection-description').textContent = `還款 $${op?.transaction.amount || ''}：${state.rejection.message}`;
   }
+  $('fps-recipients').innerHTML = state.fpsRecipients.length ? state.fpsRecipients.map(r => {
+    const pending = state.outbox.some(op => op.action === 'fpsRecipient' && op.key === r.key);
+    return `<div class="fps-recipient-row"><strong>${escape(r.label || r.recipient)}</strong><p>${escape(r.recipient)} · ${r.match === 'domain' ? '電郵域名' : '完整 ID'} · ${names[r.category]}<br>${pending ? '設定未同步' : connected ? (r.enabled ? '已同步 · 自動記支出' : '已同步 · 每次詢問') : '本機設定 · 請連接並同步'}</p><button type="button" class="quiet" data-fps-edit="${escape(r.key)}">修改設定 ↗</button></div>`;
+  }).join('') : '<p class="hint">未有已確認收款人。所有 FPS 轉帳先詢問，唔會直接記支出。</p>';
   repaymentOptions();
 }
 async function changed() { await refresh(); broadcast?.postMessage('changed'); }
@@ -111,10 +115,11 @@ function download(content, name, type) {
 }
 function fillSettings() { $('endpoint').value = state.settings.endpoint; $('token').value = state.settings.token; }
 async function start() {
-  for (const id of ['entry-category', 'edit-category']) for (const category of E.CATEGORIES) {
+  for (const id of ['entry-category', 'edit-category', 'fps-category']) for (const category of E.CATEGORIES) {
     const option = document.createElement('option'); option.value = category; option.textContent = names[category]; $(id).append(option);
   }
   $('month').value = E.hkDay(new Date().toISOString()).slice(0, 7);
+  $('fps-category').value = 'Bills';
   await refresh(); fillSettings();
   const base = new URL(location.href); base.search = ''; base.hash = 'add';
   $('cash-link').textContent = base.href;
@@ -153,6 +158,12 @@ async function start() {
     } catch (err) { notify(err.message, true); } finally { repaymentBalance(); }
   };
   document.body.addEventListener('click', event => {
+    const fpsEdit = event.target.closest('[data-fps-edit]');
+    if (fpsEdit) {
+      const r = state.fpsRecipients.find(x => x.key === fpsEdit.dataset.fpsEdit);
+      $('fps-recipient').value = r.recipient; $('fps-match').value = r.match; $('fps-label').value = r.label; $('fps-category').value = r.category; $('fps-enabled').checked = r.enabled;
+      $('fps-recipient-form').scrollIntoView({ block: 'start' }); return;
+    }
     const repay = event.target.closest('[data-reimburse]');
     if (repay) { route('reimburse'); $('reimbursement-expense').value = repay.dataset.reimburse; repaymentBalance(); return; }
     const original = event.target.closest('[data-original]');
@@ -189,6 +200,16 @@ async function start() {
     if (busy) return notify('請等同步完成', true);
     await S.mutate(s => { s.settings.token = ''; }); await changed(); fillSettings(); notify('已中斷連接，本機記錄仍然保留');
   };
+  $('fps-recipient-form').onsubmit = async event => {
+    event.preventDefault();
+    if (busy) return notify('請等同步完成再修改收款人', true);
+    try {
+      const input = { recipient: $('fps-recipient').value, match: $('fps-match').value, label: $('fps-label').value, category: $('fps-category').value, enabled: $('fps-enabled').checked };
+      await S.mutate(s => S.rememberFpsRecipient(s, input));
+      $('fps-recipient-form').reset(); $('fps-category').value = 'Bills'; await changed();
+      notify('收款人設定已儲存，同步後生效'); synchronize();
+    } catch (err) { notify(err.message, true); }
+  };
   for (const [id, keep] of [['keep-local', true], ['keep-remote', false]]) $(id).onclick = async () => { await S.mutate(s => S.resolveConflict(s, keep)); await changed(); synchronize(true); };
   $('discard-rejected').onclick = async () => {
     try { await S.mutate(s => S.discardRejected(s)); await changed(); notify('已移除被拒絕嘅本機還款'); synchronize(true); }
@@ -196,7 +217,7 @@ async function start() {
   };
   $('export').onclick = async () => {
     const latest = await S.read();
-    download(JSON.stringify({ schema: 2, exportedAt: new Date().toISOString(), transactions: latest.transactions.map(E.inputOf), rules: latest.rules }, null, 2), 'pocket-ledger-' + E.hkDay(new Date().toISOString()) + '.json', 'application/json'); notify('備份已下載，不包含連接密碼');
+    download(JSON.stringify({ schema: 2, exportedAt: new Date().toISOString(), transactions: latest.transactions.map(E.inputOf), rules: latest.rules, fpsRecipients: latest.fpsRecipients }, null, 2), 'pocket-ledger-' + E.hkDay(new Date().toISOString()) + '.json', 'application/json'); notify('備份已下載，不包含連接密碼');
   };
   $('csv').onclick = async () => {
     const latest = await S.read();

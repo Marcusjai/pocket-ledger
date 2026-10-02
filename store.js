@@ -4,7 +4,7 @@
   root.LedgerStore = api;
 })(typeof globalThis !== 'undefined' ? globalThis : this, function (E) {
   'use strict';
-  const initial = () => ({ schema: 2, transactions: [], rules: [], outbox: [], settings: { endpoint: '', token: '' }, lastSync: '', conflict: null, rejection: null, syncLease: null });
+  const initial = () => ({ schema: 2, transactions: [], rules: [], fpsRecipients: [], outbox: [], settings: { endpoint: '', token: '' }, lastSync: '', conflict: null, rejection: null, syncLease: null });
   const uid = () => crypto.randomUUID();
   let connection;
   async function open() {
@@ -30,6 +30,7 @@
         try {
           const state = request.result || initial();
           state.schema = 2;
+          state.fpsRecipients ||= [];
           result = fn(state);
           store.put(state, 'ledger');
         } catch (e) { error = e; tx.abort(); }
@@ -65,6 +66,15 @@
     state.rules.push({ merchantKey: rule.merchantKey, category: rule.category });
     state.outbox.push({ action: 'rule', operationId: uid(), merchantKey: rule.merchantKey, category: rule.category });
   }
+  function rememberFpsRecipient(state, input) {
+    const recipient = E.fpsRecipient(input);
+    state.fpsRecipients ||= [];
+    if (!state.fpsRecipients.some(r => r.key === recipient.key) && state.fpsRecipients.length >= 1000) throw new Error('FPS 收款人上限為 1,000 個');
+    state.fpsRecipients = state.fpsRecipients.filter(r => r.key !== recipient.key);
+    state.fpsRecipients.push(recipient);
+    state.outbox.push({ action: 'fpsRecipient', operationId: uid(), ...recipient });
+    return recipient;
+  }
   const target = op => op.transaction ? op.transaction.id : op.id;
   function acknowledge(state, op, remote) {
     state.outbox = state.outbox.filter(x => x.operationId !== op.operationId);
@@ -98,6 +108,9 @@
       if (r && r.merchantKey) rules.set(r.merchantKey, { merchantKey: r.merchantKey, category: op.category });
     }
     state.rules = [...rules.values()];
+    const recipients = new Map((snapshot.fpsRecipients || state.fpsRecipients || []).map(r => [r.key, E.fpsRecipient(r)]));
+    for (const op of state.outbox) if (op.action === 'fpsRecipient') recipients.set(op.key, E.fpsRecipient(op));
+    state.fpsRecipients = [...recipients.values()];
   }
   function resolveConflict(state, keepLocal) {
     const c = state.conflict;
@@ -120,6 +133,7 @@
   }
   function restore(state, data) {
     if (![1, 2].includes(data.schema) || !Array.isArray(data.transactions) || data.transactions.length > 10000 || !Array.isArray(data.rules) || data.rules.length > 10000) throw new Error('備份格式不正確');
+    if (data.fpsRecipients != null && (!Array.isArray(data.fpsRecipients) || data.fpsRecipients.length > 1000)) throw new Error('FPS 收款人備份格式不正確');
     const next = structuredClone(state), ids = new Map();
     let count = 0;
     // Restore dependencies first, even when a backup is ordered newest-first.
@@ -132,6 +146,7 @@
       if (result.status === 'inserted') count++;
     }
     for (const rule of data.rules) rememberRule(next, rule);
+    for (const recipient of data.fpsRecipients || []) rememberFpsRecipient(next, recipient);
     Object.assign(state, next);
     return count;
   }
@@ -173,9 +188,13 @@
             } catch (_) { /* The confirmed rejection remains recoverable even if the refresh fails. */ }
           }
           if (op.action === 'reimburse' && code === 'INVALID_ACTION') throw new Error('Google 後端未支援還款。請更新三個 .gs 檔並部署新版本；記錄仍留喺本機');
+          if (op.action === 'fpsRecipient' && code === 'INVALID_ACTION') throw new Error('Google 後端未支援 FPS。請更新三個 .gs 檔並部署 v1.2.0；收款人設定仍留喺本機');
           throw new Error(response.error?.message || '同步失敗，記錄仍留喺本機');
         }
-        if (op.action === 'rule') {
+        if (op.action === 'fpsRecipient') {
+          if (!response.fpsRecipient || JSON.stringify(E.fpsRecipient(response.fpsRecipient)) !== JSON.stringify(E.fpsRecipient(op))) throw new Error('FPS 收款人設定未獲確認，請重試');
+          await io.mutate(s => { s.outbox = s.outbox.filter(x => x.operationId !== op.operationId); });
+        } else if (op.action === 'rule') {
           if (!response.rule || response.rule.merchantKey !== op.merchantKey || response.rule.category !== op.category) throw new Error('分類規則未獲確認，請重試');
           await io.mutate(s => { s.outbox = s.outbox.filter(x => x.operationId !== op.operationId); });
         } else {
@@ -214,5 +233,5 @@
       throw err;
     } finally { clearTimeout(timeout); }
   }
-  return { initial, uid, read, mutate, add, categorize, rememberRule, acknowledge, merge, resolveConflict, discardRejected, restore, sync, send, validEndpoint };
+  return { initial, uid, read, mutate, add, categorize, rememberRule, rememberFpsRecipient, acknowledge, merge, resolveConflict, discardRejected, restore, sync, send, validEndpoint };
 });
