@@ -6,7 +6,7 @@
 })(typeof globalThis !== 'undefined' ? globalThis : this, function () {
   'use strict';
   const CATEGORIES = ['Dining', 'Transport', 'Groceries', 'Shopping', 'Bills', 'Entertainment', 'Health', 'Other', 'Uncategorized'];
-  const SOURCES = ['Cash', 'ApplePay', 'Octopus'];
+  const SOURCES = ['Cash', 'ApplePay', 'Octopus', 'FPS'];
   const REPAYMENT_SOURCES = ['BankTransfer', 'FPS', 'PayMe', 'Cash'];
   const isReimbursement = r => r.kind === 'reimbursement';
   const BUILTINS = [
@@ -34,6 +34,45 @@
     const result = Number(parts[0]) * 100 + Number((parts[1] || '').padEnd(2, '0'));
     if (!Number.isSafeInteger(result) || result <= 0 || result > 999999999) fail('INVALID_AMOUNT', '金額必須大過零');
     return result;
+  }
+  function zonedTime(timestamp) {
+    if (typeof timestamp !== 'string' || !/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d{1,3})?(?:Z|[+-]\d\d:\d\d)$/.test(timestamp) || !Number.isFinite(Date.parse(timestamp))) fail('INVALID_TIMESTAMP', '時間必須係有時區嘅 ISO 8601');
+    const parts = timestamp.slice(0, 19).split(/[-T:]/).map(Number);
+    if (parts[1] < 1 || parts[1] > 12 || parts[2] < 1 || parts[2] > new Date(Date.UTC(parts[0], parts[1], 0)).getUTCDate() || parts[3] > 23 || parts[4] > 59 || parts[5] > 59) fail('INVALID_TIMESTAMP', '交易日期或時間不正確');
+    return new Date(timestamp).toISOString();
+  }
+  function fpsRecipient(input) {
+    if (!input || typeof input !== 'object' || Array.isArray(input)) fail('INVALID_INPUT', 'FPS 收款人格式不正確');
+    const recipient = text(input.recipient, 160, '收款人 ID').normalize('NFKC').toLowerCase().replace(/\s+/g, ' ');
+    const match = input.match || 'exact';
+    if (!recipient || !['exact', 'domain'].includes(match)) fail('INVALID_INPUT', '請輸入銀行短訊內嘅收款人 ID');
+    if (match === 'domain' && !/^(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,63}$/.test(recipient)) fail('INVALID_INPUT', '請輸入完整電郵域名，例如 hkelectric.com');
+    if (typeof input.enabled !== 'boolean') fail('INVALID_INPUT', '請確認是否自動記支出');
+    const label = text(input.label, 160, '收款人名稱');
+    const category = input.category || 'Uncategorized';
+    if (!CATEGORIES.includes(category)) fail('INVALID_CATEGORY', '分類不正確');
+    return { key: match + ':' + recipient, match, recipient, label, category, enabled: input.enabled };
+  }
+  function matchFpsRecipient(recipient, recipients) {
+    const key = String(recipient).normalize('NFKC').trim().toLowerCase().replace(/\s+/g, ' ');
+    const records = (recipients || []).map(fpsRecipient);
+    // An exact recipient exception overrides a domain, including when disabled.
+    return records.find(r => r.match === 'exact' && r.recipient === key) || records.find(r => r.match === 'domain' && key.includes('@') && key.slice(key.lastIndexOf('@') + 1) === r.recipient);
+  }
+  function parseFpsNotification(input) {
+    if (!input || typeof input !== 'object' || Array.isArray(input)) fail('INVALID_INPUT', '銀行通知格式不正確');
+    const title = text(input.title, 160, '通知標題').normalize('NFKC').toLowerCase();
+    const body = text(input.body, 2048, '通知內容').normalize('NFKC').replace(/[’]/g, "'").replace(/\s+/g, ' ');
+    if (!/^#?hasesecure$/.test(title)) return null;
+    const match = /^Hang Seng: You've transferred HKD((?:\d{1,7}|\d{1,3}(?:,\d{3}){1,2})(?:\.\d{1,2})?) to account\s*\/\s*Proxy ID (.{1,160}?) on (\d{4}-\d\d-\d\d) (\d\d:\d\d)\.(?: ENQ: \d{6,16})?$/i.exec(body);
+    if (!match) return null;
+    const amount = (cents(match[1].replace(/,/g, '')) / 100).toFixed(2);
+    const recipient = match[2].trim();
+    const timestamp = zonedTime(match[3] + 'T' + match[4] + ':00+08:00');
+    // The notification date is stable on a retry and separates otherwise identical
+    // transfers in the same bank-reported minute. Never replace it with Current Date.
+    const notificationTimestamp = zonedTime(input.notificationTimestamp);
+    return { recipient, amount, timestamp, notificationTimestamp, identity: JSON.stringify(['hang-seng-fps', body, notificationTimestamp]) };
   }
   function classify(merchant, note, source, explicit, rules) {
     const key = merchantKey(merchant);
@@ -70,10 +109,7 @@
     let timestamp = input.timestamp;
     if (!timestamp && (source !== 'Cash' || reimbursement)) fail('INVALID_TIMESTAMP', '請提供包含時區嘅交易／收款時間');
     timestamp = timestamp || now || new Date().toISOString();
-    if (typeof timestamp !== 'string' || !/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d{1,3})?(?:Z|[+-]\d\d:\d\d)$/.test(timestamp) || !Number.isFinite(Date.parse(timestamp))) fail('INVALID_TIMESTAMP', '時間必須係有時區嘅 ISO 8601');
-    const parts = timestamp.slice(0, 19).split(/[-T:]/).map(Number);
-    if (parts[1] < 1 || parts[1] > 12 || parts[2] < 1 || parts[2] > new Date(Date.UTC(parts[0], parts[1], 0)).getUTCDate() || parts[3] > 23 || parts[4] > 59 || parts[5] > 59) fail('INVALID_TIMESTAMP', '交易日期或時間不正確');
-    const canonicalTime = new Date(timestamp).toISOString();
+    const canonicalTime = zonedTime(timestamp);
     const merchant = reimbursement ? '' : text(input.merchant, 160, '商戶').normalize('NFKC').replace(/\s+/g, ' ');
     const note = text(input.note, 500, '備註');
     const account = text(input.account, 64, '卡別名');
@@ -87,7 +123,7 @@
   function insert(rows, input, rules, now) {
     if (!input || typeof input !== 'object' || Array.isArray(input)) fail('INVALID_INPUT', '交易格式不正確');
     const previous = rows.find(r => r.id === input.id);
-    const stableInput = previous && !input.timestamp && input.source !== 'ApplePay' && input.source !== 'Octopus' ? { ...input, timestamp: previous.timestamp } : input;
+    const stableInput = previous && !input.timestamp && (input.source || 'Cash') === 'Cash' && !isReimbursement(input) ? { ...input, timestamp: previous.timestamp } : input;
     const record = prepare(stableInput, rules, now);
     const sameId = rows.find(r => r.id === record.id);
     if (sameId) {
@@ -139,5 +175,5 @@
     return { totalCents, todayCents, count, grossCents, reimbursedCents, byCategory, byDay };
   }
   function inputOf(r) { return { id: r.id, kind: r.kind || 'expense', ...(isReimbursement(r) ? { expenseId: r.expenseId, payer: r.payer } : {}), timestamp: r.timestamp, source: r.source, amount: (r.amountCents / 100).toFixed(2), currency: r.currency, merchant: r.merchant, account: r.account, note: r.note, category: r.category }; }
-  return { CATEGORIES, SOURCES, REPAYMENT_SOURCES, isReimbursement, reimbursementSummary, categoryOf, merchantKey, cents, classify, prepare, insert, hkDay, totals, inputOf, fail };
+  return { CATEGORIES, SOURCES, REPAYMENT_SOURCES, isReimbursement, reimbursementSummary, categoryOf, merchantKey, cents, zonedTime, fpsRecipient, matchFpsRecipient, parseFpsNotification, classify, prepare, insert, hkDay, totals, inputOf, fail };
 });

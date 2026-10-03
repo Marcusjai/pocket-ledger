@@ -1,5 +1,5 @@
-const CACHE = 'pocket-ledger-shell-8e830da8efdf';
-const ASSETS = ['./', './index.html', './styles.css?v=8e830da8efdf', './engine.js?v=8e830da8efdf', './store.js?v=8e830da8efdf', './app.js?v=8e830da8efdf', './manifest.webmanifest', './icons/icon.svg', './icons/icon-192.png', './icons/icon-512.png'];
+const CACHE = 'pocket-ledger-shell-36d71b8a93ed';
+const ASSETS = ['./', './index.html', './styles.css?v=36d71b8a93ed', './engine.js?v=36d71b8a93ed', './store.js?v=36d71b8a93ed', './app.js?v=36d71b8a93ed', './manifest.webmanifest', './icons/icon.svg', './icons/icon-192.png', './icons/icon-512.png'];
 self.addEventListener('install', event => event.waitUntil(caches.open(CACHE).then(cache => cache.addAll(ASSETS))));
 self.addEventListener('activate', event => event.waitUntil(Promise.all([
   caches.keys().then(keys => Promise.all(keys.filter(k => k.startsWith('pocket-ledger-shell-') && k !== CACHE).map(k => caches.delete(k)))), self.clients.claim()
