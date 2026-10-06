@@ -63,7 +63,7 @@ or a production deployment. All ledger entries in these tests are synthetic.
 Storage-failure coverage verifies the visible startup error and absence of an
 automatic transaction, not full recovery of the application after a failure.
 
-## Verified result and environment limitation (2026-10-06)
+## Original prefill verification and environment limitation (2026-10-06)
 
 - Combined Node suite: 131/131 passed (parser/domain, notification extraction,
   simulated-DOM integration, and service-worker/asset checks)
@@ -79,3 +79,31 @@ open, a clear storage error appears and no repayment is saved, but routing
 never starts and the amount remains in the URL fragment. The fragment is not
 sent as part of an HTTP request. Retrying after storage works can still consume
 the handoff. This failure path is outside the handoff change's scope.
+
+## v1.2.2 offline update repair
+
+Verification: `node --test tests/*.test.js` passes 146/146 tests, including 15
+independent update-cache regression cases. JavaScript syntax, Python browser
+test compilation, and the whitespace/diff checks also pass.
+
+The previous worker used normal HTTP-cache requests when populating a new
+offline cache. A still-fresh HTTP entry for the unversioned HTML could therefore
+be installed as the new worker's offline page. A deterministic model reproduces
+this failure with the actual worker: installation and activation succeed, yet
+navigation serves v1.2.0 under the new cache name. This is a reproducible code
+path, not a claim that the browser's private cache has been inspected.
+
+The repair uses a new release/cache ID, downloads assets with `cache: 'reload'`,
+and verifies the HTML release marker before installation succeeds. A failed
+download or mismatched marker rejects installation and removes only the failed
+candidate shell cache. The previous active cache remains available. Fetches
+look only in the worker's own release cache, so a waiting or failed candidate
+cannot supply the active worker's HTML or scripts.
+
+There is no `skipWaiting`, forced client navigation, data-store deletion, or
+change to ledger entries, connection settings, or the manual Save flow. Existing
+tabs can finish their work before the new worker activates normally.
+
+The cache tests are deterministic models; native browser/service-worker and
+iPhone update behavior remain unverified because of the browser-launch limit
+described above. The existing browser suite is still provided for that check.

@@ -2,6 +2,7 @@
 <html lang="zh-Hant-HK">
 <head>
   <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="pocket-ledger-release" content="repayment-prefill-2">
   <meta name="theme-color" content="#122a2a"><meta name="description" content="本機優先嘅個人支出紀錄。快速記現金，同步 Google Sheet。">
   <meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-status-bar-style" content="default">
   <meta name="referrer" content="no-referrer">
@@ -60,7 +61,7 @@
         <article id="conflict-panel" class="panel" hidden><h2>分類有衝突</h2><p id="conflict-description"></p><button id="keep-local" class="primary">保留本機分類</button><button id="keep-remote" class="quiet">採用雲端分類</button></article>
         <article id="rejection-panel" class="panel" hidden><h2>有還款未能入帳</h2><p id="rejection-description"></p><p class="hint">伺服器已確認拒絕呢筆還款。移除呢筆本機暫存，再核對原支出及已收金額。已成功入帳嘅記錄會保留。</p><button id="discard-rejected" class="secondary">移除呢筆未同步還款</button></article>
         <article class="panel"><h2>備份與還原</h2><p class="hint">定期下載備份。清除瀏覽器資料或移除 App，可能會刪除未同步記錄。</p><div class="actions"><button id="export" class="secondary">下載備份 JSON</button><button id="csv" class="secondary">匯出 CSV</button><label class="file-button secondary">還原 JSON<input id="import" type="file" accept="application/json,.json"></label></div><p class="hint">還原會合併記錄；同一 ID 不會重複，並會排隊同步。</p></article>
-        <article class="panel"><h2>iPhone 快速入口</h2><p>在 Safari 開啟 App，分享 → 加入主畫面。捷徑「打開 URL」使用以下地址，可直接開啟現金輸入：</p><code id="cash-link"></code><p class="hint">可指派到動作按鈕，或用 Siri 執行呢個捷徑。語音直接入帳、Wallet 及 FPS 通知設定見 SHORTCUTS / FPS 指引。</p><p id="offline-ready" class="hint">正在準備離線使用…</p><p class="hint" id="app-version">Pocket Ledger v1.2.1 · 還款金額預填</p></article>
+        <article class="panel"><h2>iPhone 快速入口</h2><p>在 Safari 開啟 App，分享 → 加入主畫面。捷徑「打開 URL」使用以下地址，可直接開啟現金輸入：</p><code id="cash-link"></code><p class="hint">可指派到動作按鈕，或用 Siri 執行呢個捷徑。語音直接入帳、Wallet 及 FPS 通知設定見 SHORTCUTS / FPS 指引。</p><p id="offline-ready" class="hint">正在準備離線使用…</p><p class="hint" id="app-version">Pocket Ledger v1.2.2 · 還款金額預填</p></article>
       </section>
     </main>
     <nav aria-label="主要選單"><button data-view="dashboard" class="active"><span aria-hidden="true">▥</span>總覽</button><button data-view="add"><span aria-hidden="true">＋</span>記一筆</button><button data-view="review"><span aria-hidden="true">☷</span>待分類 <b id="review-badge" hidden>0</b></button><button data-view="settings"><span aria-hidden="true">⚙</span>設定</button></nav>

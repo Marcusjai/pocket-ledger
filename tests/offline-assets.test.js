@@ -5,11 +5,14 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 const root = path.join(__dirname, '..');
+class WorkerRequest extends Request {
+  constructor(input, options) { super(typeof input === 'string' ? new URL(input, 'https://example.invalid/pocket-ledger/') : input, options); }
+}
 
 function worker(overrides = {}) {
   const handlers = {};
   const context = vm.createContext({
-    URL, caches: {}, fetch: () => { throw new Error('Unexpected network request'); },
+    URL, Request: WorkerRequest, caches: {}, fetch: () => { throw new Error('Unexpected network request'); },
     self: { location: { origin: 'https://example.invalid' }, clients: { claim: async () => {} }, addEventListener: (type, callback) => { handlers[type] = callback; } },
     ...overrides
   });
@@ -28,12 +31,21 @@ test('offline shell contains every versioned script and stylesheet in HTML', () 
     assert.ok(fs.existsSync(path.join(root, file)), `Missing asset file: ${file}`);
   }
   assert.notEqual(cache, 'pocket-ledger-shell-36d71b8a93ed');
-  assert.match(html, /Pocket Ledger v1\.2\.1/);
+  assert.match(html, /Pocket Ledger v1\.2\.2/);
+  assert.match(html, /<meta name="pocket-ledger-release" content="repayment-prefill-2">/);
 });
 
 test('installation caches the complete matching shell', async () => {
   let opened, cached, completed;
-  const { handlers, assets, cache } = worker({ caches: { open: async name => { opened = name; return { addAll: async urls => { cached = Array.from(urls); } }; } } });
+  const { handlers, assets, cache } = worker({ caches: { open: async name => { opened = name; return {
+    addAll: async requests => {
+      cached = Array.from(requests, request => {
+        assert.equal(request.cache, 'reload');
+        return './' + request.url.slice('https://example.invalid/pocket-ledger/'.length);
+      });
+    },
+    match: async () => new Response(fs.readFileSync(path.join(root, 'index.html'), 'utf8'))
+  }; } } });
   handlers.install({ waitUntil: promise => { completed = promise; } });
   await completed;
   assert.equal(opened, cache);
@@ -43,10 +55,10 @@ test('installation caches the complete matching shell', async () => {
 test('activation removes only older Pocket Ledger shell caches', async () => {
   let completed;
   const removed = [];
-  const { handlers, cache } = worker({ caches: { keys: async () => ['pocket-ledger-shell-36d71b8a93ed', 'pocket-ledger-shell-repayment-prefill-1', 'other-app'], delete: async key => { removed.push(key); } } });
+  const { handlers, cache } = worker({ caches: { keys: async () => ['pocket-ledger-shell-36d71b8a93ed', 'pocket-ledger-shell-repayment-prefill-1', 'pocket-ledger-shell-repayment-prefill-2', 'other-app'], delete: async key => { removed.push(key); } } });
   handlers.activate({ waitUntil: promise => { completed = promise; } });
   await completed;
-  assert.deepEqual(removed, ['pocket-ledger-shell-36d71b8a93ed']);
+  assert.deepEqual(removed, ['pocket-ledger-shell-36d71b8a93ed', 'pocket-ledger-shell-repayment-prefill-1']);
   assert.ok(!removed.includes(cache));
 });
 
@@ -61,7 +73,10 @@ test('worker leaves cross-origin and non-GET transaction requests alone', () => 
 
 test('navigation serves the cached HTML from the active release', async () => {
   let response;
-  const { handlers } = worker({ caches: { match: async key => { assert.equal(key, './index.html'); return 'cached release HTML'; } } });
+  const { handlers } = worker({ caches: { open: async name => {
+    assert.equal(name, 'pocket-ledger-shell-repayment-prefill-2');
+    return { match: async key => { assert.equal(key, './index.html'); return 'cached release HTML'; } };
+  } } });
   handlers.fetch({ request: { url: 'https://example.invalid/#reimburse?amount=12.34', method: 'GET', mode: 'navigate' }, respondWith: promise => { response = promise; } });
   assert.equal(await response, 'cached release HTML');
 });

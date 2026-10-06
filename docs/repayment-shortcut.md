@@ -4,7 +4,7 @@ This changes only **HASEnotice → received-transfer menu → Record repayment**
 
 ## Deploy and refresh the app first
 
-Do not switch the Shortcut to amount links until the app update is deployed. In Pocket Ledger settings, check for **Pocket Ledger v1.2.1 · 還款金額預填**.
+Do not switch the Shortcut to amount links until the app update is deployed. In Pocket Ledger settings, check for **Pocket Ledger v1.2.2 · 還款金額預填**.
 
 If an older offline copy appears, open the app while online and let its update download. When settings says a new version is downloaded, close **all** Pocket Ledger browser tabs and its Home Screen app, then reopen it. Verify the version again. Do not clear website data to refresh it: that could remove local, unsynced records.
 
@@ -85,4 +85,4 @@ This is amount prefilling only. It does not identify the original expense or det
 
 ## Short version
 
-After the deployed app shows v1.2.1, edit only **Record repayment**: Match Text on Notification Body with the pattern above → Count Items → If exactly 1 → Get Group 1 → URL Encode that number → URL with `#reimburse?amount=` plus the encoded token. Otherwise use the old bare `#reimburse` URL. After End If, Open URLs using If Result. Test without saving, then select the original expense and save manually for real repayments.
+After the deployed app shows v1.2.2, edit only **Record repayment**: Match Text on Notification Body with the pattern above → Count Items → If exactly 1 → Get Group 1 → URL Encode that number → URL with `#reimburse?amount=` plus the encoded token. Otherwise use the old bare `#reimburse` URL. After End If, Open URLs using If Result. Test without saving, then select the original expense and save manually for real repayments.
