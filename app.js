@@ -6,6 +6,8 @@ const icons = { Dining: '食', Transport: '行', Groceries: '買', Shopping: '�
 const sources = { Cash: '現金', ApplePay: 'Apple Pay', Octopus: '八達通', BankTransfer: '銀行轉帳', FPS: 'FPS', PayMe: 'PayMe' };
 const money = cents => (cents / 100).toLocaleString('en-HK', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 let state, busy = false, editId, toastTimer, entryMode = 'expense';
+let repaymentDraftEdited = false, pendingRepaymentAmount = null;
+let repaymentSaving = false, repaymentDraftRevision = 0, routeRevision = 0;
 const broadcast = typeof BroadcastChannel !== 'undefined' ? new BroadcastChannel('pocket-ledger') : null;
 function escape(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
 function notify(message, error = false) {
@@ -13,14 +15,51 @@ function notify(message, error = false) {
   clearTimeout(toastTimer); toastTimer = setTimeout(() => { $('toast').hidden = true; }, error ? 9000 : 4000);
 }
 function route(view) {
+  routeRevision++;
+  const link = RepaymentLink.parse(view);
+  view = link.view;
+  if (view !== 'reimburse') clearRepaymentLink();
   if (view === 'reimburse') { setEntryMode('reimbursement'); view = 'add'; }
   if (!['dashboard', 'add', 'review', 'settings'].includes(view)) view = 'dashboard';
   document.querySelectorAll('.view').forEach(el => { el.hidden = el.id !== view; });
   document.querySelectorAll('nav button').forEach(el => { el.classList.toggle('active', el.dataset.view === view); el.setAttribute('aria-current', el.dataset.view === view ? 'page' : 'false'); });
   const hash = view === 'add' && entryMode === 'reimbursement' ? '#reimburse' : '#' + view;
+  // Consume the handoff once, removing its amount from the current history entry.
   if (location.hash !== hash) history.replaceState(null, '', hash);
+  if (link.invalid) {
+    clearRepaymentLink();
+    showRepaymentLink('捷徑金額格式未能確認，請按通知手動核對金額。未有儲存還款。');
+  } else if (link.amount) receiveRepaymentAmount(link.amount);
   window.scrollTo(0, 0);
   if (view === 'add') $(entryMode === 'reimbursement' ? 'reimbursement-amount' : 'amount').focus();
+}
+function clearRepaymentLink() {
+  pendingRepaymentAmount = null;
+  $('repayment-link-notice').hidden = true;
+  $('repayment-link-actions').hidden = true;
+}
+function showRepaymentLink(message) {
+  $('repayment-link-message').textContent = message;
+  $('repayment-link-notice').hidden = false;
+}
+function hasRepaymentDraft() {
+  return repaymentDraftEdited || ['expense', 'amount', 'payer', 'note', 'time'].some(id => $('reimbursement-' + id).value !== '') || $('reimbursement-source').value !== 'BankTransfer';
+}
+function receiveRepaymentAmount(amount) {
+  clearRepaymentLink();
+  if (repaymentSaving) {
+    pendingRepaymentAmount = amount;
+    showRepaymentLink(`正在儲存現有還款。新金額 $${amount} 會保留，完成後再由你核對及儲存。`);
+    return;
+  }
+  if (hasRepaymentDraft()) {
+    pendingRepaymentAmount = amount;
+    showRepaymentLink(`捷徑帶入新金額 $${amount}。現有未儲存內容未有更改；請選擇保留，或者放棄現有內容開新還款。`);
+    $('repayment-link-actions').hidden = false;
+    return;
+  }
+  $('reimbursement-amount').value = amount;
+  showRepaymentLink(`已帶入 $${amount}。請核對通知、選擇原支出，再撳「儲存還款」。未有自動入帳。`);
 }
 function setEntryMode(mode) {
   entryMode = mode;
@@ -31,7 +70,7 @@ function setEntryMode(mode) {
 function repaymentBalance() {
   const id = $('reimbursement-expense').value;
   const expense = state.transactions.find(r => r.id === id && !E.isReimbursement(r));
-  $('save-reimbursement').disabled = !expense; $('copy-expense-id').disabled = !expense;
+  $('save-reimbursement').disabled = !expense || repaymentSaving; $('copy-expense-id').disabled = !expense;
   $('reimbursement-expense-id').textContent = expense?.id || '請先選擇原支出';
   if (!expense) { $('reimbursement-balance').textContent = '先記錄原支出。已全數收回嘅支出唔會出現喺選單。'; return; }
   const summary = E.reimbursementSummary(state.transactions, id);
@@ -129,6 +168,17 @@ async function start() {
   $('quick-cash').onclick = () => { setEntryMode('expense'); document.querySelector('input[name=source][value=Cash]').checked = true; route('add'); };
   $('mode-expense').onclick = () => { setEntryMode('expense'); route('add'); };
   $('mode-reimbursement').onclick = () => route('reimburse');
+  for (const type of ['input', 'change']) $('reimbursement-form').addEventListener(type, () => {
+    repaymentDraftEdited = true; repaymentDraftRevision++;
+    if (!pendingRepaymentAmount) clearRepaymentLink();
+  });
+  $('keep-repayment-draft').onclick = clearRepaymentLink;
+  $('replace-repayment-draft').onclick = () => {
+    if (!pendingRepaymentAmount || repaymentSaving) return;
+    const amount = pendingRepaymentAmount;
+    $('reimbursement-form').reset(); repaymentDraftEdited = false;
+    receiveRepaymentAmount(amount); repaymentBalance(); $('reimbursement-amount').focus();
+  };
   $('reimbursement-expense').onchange = repaymentBalance;
   $('copy-expense-id').onclick = async () => {
     try { await navigator.clipboard.writeText($('reimbursement-expense').value); notify('原支出 ID 已複製'); }
@@ -148,14 +198,28 @@ async function start() {
     } catch (err) { notify(err.message, true); } finally { if (button) button.disabled = false; }
   };
   $('reimbursement-form').onsubmit = async event => {
-    event.preventDefault(); const button = $('save-reimbursement'); button.disabled = true;
+    event.preventDefault();
+    if (repaymentSaving) return;
+    repaymentSaving = true;
+    const submittedDraft = repaymentDraftRevision, submittedRoute = routeRevision;
+    const button = $('save-reimbursement'); button.disabled = true;
+    if (pendingRepaymentAmount) receiveRepaymentAmount(pendingRepaymentAmount);
     try {
       const timestamp = $('reimbursement-time').value ? new Date($('reimbursement-time').value + '+08:00').toISOString() : new Date().toISOString();
       const input = { id: S.uid(), kind: 'reimbursement', expenseId: $('reimbursement-expense').value, amount: $('reimbursement-amount').value, source: $('reimbursement-source').value, payer: $('reimbursement-payer').value, note: $('reimbursement-note').value, timestamp };
       await S.mutate(s => S.add(s, input));
-      $('reimbursement-form').reset(); $('month').value = E.hkDay(input.timestamp).slice(0, 7);
-      await changed(); route('dashboard'); notify('已記還款 $' + money(E.cents(input.amount))); synchronize();
-    } catch (err) { notify(err.message, true); } finally { repaymentBalance(); }
+      // A slow local save must not erase edits or a newer Shortcut handoff.
+      if (submittedDraft === repaymentDraftRevision) { $('reimbursement-form').reset(); repaymentDraftEdited = false; }
+      $('month').value = E.hkDay(input.timestamp).slice(0, 7);
+      await changed(); repaymentSaving = false;
+      if (pendingRepaymentAmount) receiveRepaymentAmount(pendingRepaymentAmount);
+      else if (submittedRoute === routeRevision && submittedDraft === repaymentDraftRevision) { clearRepaymentLink(); route('dashboard'); }
+      notify('已記還款 $' + money(E.cents(input.amount))); synchronize();
+    } catch (err) { notify(err.message, true); } finally {
+      repaymentSaving = false;
+      if (pendingRepaymentAmount) receiveRepaymentAmount(pendingRepaymentAmount);
+      repaymentBalance();
+    }
   };
   document.body.addEventListener('click', event => {
     const fpsEdit = event.target.closest('[data-fps-edit]');
