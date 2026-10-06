@@ -1,7 +1,8 @@
 # Repayment handoff tests
 
-These tests run only against a loopback HTTP server in fresh ephemeral Chromium
-contexts. They use synthetic IndexedDB records and empty connection settings.
+The browser tests are designed to run against a loopback HTTP server in fresh
+ephemeral Chromium contexts, using synthetic IndexedDB records and empty
+connection settings.
 They never call a real transaction backend. Unexpected non-loopback page requests
 are blocked and fail the test; a self-only Content Security Policy also blocks
 remote requests from pages and service workers.
@@ -41,7 +42,7 @@ Tests start and stop their own server. `CHROMIUM_PATH` defaults to
 `/tmp/pocket-ledger-browser-tests`; set `BROWSER_TEST_ARTIFACTS` to override it.
 No dependency lockfile is introduced into the static app.
 
-Coverage includes cold/open-page handoffs, strict invalid payload rejection,
+The prepared browser cases cover cold/open-page handoffs, strict invalid payload rejection,
 manual original-expense selection and saving, oversize validation, all existing
 draft fields, explicit keep/discard, edited/cleared fields, repeat/newer links,
 navigation and Back/Forward, delayed/failed IndexedDB initialization, narrow
@@ -51,7 +52,7 @@ without mixing shell versions. The upgrade fixture reads the Git revision in
 `BASELINE_REF`, defaulting to
 `e6bd6ae3b4883fed94fa9e67c2d108ccd718bdd2`. That revision and its complete static
 assets must already exist in the local Git history; tests never fetch history.
-For the reconstructed local test checkout, run with `BASELINE_REF=93ab450`.
+Override `BASELINE_REF` only if your test fixture uses a different known baseline.
 Unit/parser tests are separate.
 
 ## Limits
@@ -68,9 +69,8 @@ automatic transaction, not full recovery of the application after a failure.
   simulated-DOM integration, and service-worker/asset checks)
 - Simulated-DOM integration specifically: 18/18 passed
 - Python browser test source: compiled successfully; 20 test methods prepared
-- Chromium browser execution: blocked before the first test, on both ordinary
-  and approved elevated runs. Chromium failed to create its process-singleton
-  socket: `process_singleton_posix.cc:297 socket() failed: Operation not permitted`
+- Chromium browser execution: blocked before the first test in the available
+  test environment. Chromium failed to create its process-singleton socket: `process_singleton_posix.cc:297 socket() failed: Operation not permitted`
 - The loopback HTTP test server did start successfully
 - No browser screenshots or real-browser pass are claimed
 
