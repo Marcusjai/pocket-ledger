@@ -6,7 +6,7 @@
 })(typeof globalThis !== 'undefined' ? globalThis : this, function () {
   'use strict';
   const CATEGORIES = ['Dining', 'Transport', 'Groceries', 'Shopping', 'Bills', 'Entertainment', 'Health', 'FriendTransfer', 'Other', 'Uncategorized'];
-  const SOURCES = ['Cash', 'ApplePay', 'Octopus', 'FPS'];
+  const SOURCES = ['Cash', 'ApplePay', 'Octopus', 'FPS', 'HaseCard'];
   const REPAYMENT_SOURCES = ['BankTransfer', 'FPS', 'PayMe', 'Cash'];
   const isReimbursement = r => r.kind === 'reimbursement';
   const FRIEND_TRANSFER = 'FriendTransfer'; // 轉俾朋友
@@ -171,6 +171,29 @@
     if (estimated) out.push({ kind: 'estimated', label: '估算' });
     return out;
   }
+  // Hang Seng Bank app push: only online / Alipay ("card-not-present") purchases. Other card alerts are
+  // ignored so Apple Pay purchases (already recorded via the Wallet trigger) are not counted twice.
+  const MERCHANT_ALIASES = [[/^ALIPAY\s*HK$/i, 'Alipay'], [/^ALIPAY$/i, 'Alipay']];
+  function parseHaseCardNotification(input) {
+    if (!input || typeof input !== 'object' || Array.isArray(input)) fail('INVALID_INPUT', '銀行通知格式不正確');
+    const app = text(input.app, 160, 'App 名稱').normalize('NFKC');
+    const title = text(input.title, 160, '通知標題').normalize('NFKC');
+    if (!/hang\s*seng|恒生/i.test(app + ' ' + title)) return null;
+    const body = text(input.body, 2048, '通知內容').normalize('NFKC').replace(/[’]/g, "'").replace(/\s+/g, ' ');
+    const m = /^You made a card-not-present transaction of (.{1,32}?) at (.{1,120}?) on (\d{2})\/(\d{2})\/(\d{4}) with credit card ending (\d{4})\.(?: .*)?$/i.exec(body);
+    if (!m) return null;
+    const money = parseMoney(m[1]);
+    if (!money || money.negative) return null;
+    const [dd, mm, yyyy] = [Number(m[3]), Number(m[4]), Number(m[5])];
+    const check = new Date(Date.UTC(yyyy, mm - 1, dd));
+    if (check.getUTCFullYear() !== yyyy || check.getUTCMonth() !== mm - 1 || check.getUTCDate() !== dd) return null;
+    const date = `${m[5]}-${m[4]}-${m[3]}`;
+    const rawMerchant = m[2].trim();
+    const merchant = (MERCHANT_ALIASES.find(([re]) => re.test(rawMerchant)) || [null, rawMerchant])[1];
+    const notificationTimestamp = input.notificationTimestamp ? zonedTime(input.notificationTimestamp) : '';
+    const timestamp = notificationTimestamp || zonedTime(date + 'T00:00:00+08:00');
+    return { rawAmount: m[1].trim(), money, merchant, rawMerchant, date, last4: m[6], timestamp, dateOnly: !notificationTimestamp, identity: JSON.stringify(['hang-seng-card', body, notificationTimestamp]) };
+  }
   function classify(merchant, note, source, explicit, rules) {
     const key = merchantKey(merchant);
     if (explicit && explicit !== 'Auto') {
@@ -280,5 +303,5 @@
     return { totalCents, todayCents, count, grossCents, reimbursedCents, byCategory, byDay };
   }
   function inputOf(r) { return { id: r.id, kind: r.kind || 'expense', ...(isReimbursement(r) ? { expenseId: r.expenseId, payer: r.payer } : {}), timestamp: r.timestamp, source: r.source, amount: (r.amountCents / 100).toFixed(2), currency: r.currency, merchant: r.merchant, account: r.account, note: r.note, category: r.category, ...(r.fx ? { fx: r.fx } : {}) }; }
-  return { CATEGORIES, FRIEND_TRANSFER, FALLBACK_HKD_RATE, parseMoney, convertToHkd, fxBadges, yenAlternatives, yenPreview, applyCurrency, YEN_CHOICES, SOURCES, REPAYMENT_SOURCES, isReimbursement, reimbursementSummary, categoryOf, merchantKey, cents, zonedTime, fpsRecipient, matchFpsRecipient, parseFpsNotification, classify, prepare, insert, hkDay, totals, inputOf, fail };
+  return { CATEGORIES, FRIEND_TRANSFER, FALLBACK_HKD_RATE, parseMoney, convertToHkd, fxBadges, yenAlternatives, yenPreview, applyCurrency, YEN_CHOICES, SOURCES, REPAYMENT_SOURCES, isReimbursement, reimbursementSummary, categoryOf, merchantKey, cents, zonedTime, fpsRecipient, matchFpsRecipient, parseFpsNotification, parseHaseCardNotification, classify, prepare, insert, hkDay, totals, inputOf, fail };
 });

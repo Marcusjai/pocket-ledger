@@ -67,3 +67,12 @@ test('badges sit in the right-hand value column under the original-currency line
   assert.ok(v > 0 && v < l && l < b, 'value column → fx line → badges');
   assert.doesNotMatch(app.slice(app.indexOf('<div class="tx-info">'), app.indexOf('<div class="tx-value">')), /fx-badge/);
 });
+test('header previews the selected currency amount and reverts on deselect', () => {
+  const h = helpers(), r = yen();
+  assert.equal(h.editHeader(r, 'Lawson', 'RMB'), 'RMB 1,200.00・換算 HK$1,296.00\nLawson · 未儲存');
+  assert.equal(h.editHeader(r, 'Lawson', 'JPY'), '¥1,200・換算 HK$62.40\nLawson · 未儲存');
+  assert.equal(h.editHeader(r, 'Lawson', null), '¥1,200・暫計 HK$61.20\nLawson');
+  const est = { ...r, fx: { ...r.fx, alternatives: { JPY: { rate: 0.051, estimated: true }, CNY: { rate: 1.09, estimated: true } } } };
+  assert.match(h.editHeader(est, 'Lawson', 'RMB'), /^RMB 1,200\.00・估算 HK\$1,308\.00/);
+  assert.match(app, /function renderFxChoices\(r\) \{ \$\('edit-merchant'\)\.textContent = editHeader\(r, [^)]*fxSelection\)/);
+});
