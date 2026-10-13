@@ -5,11 +5,21 @@ const names = { Dining: '餐飲', Transport: '交通', Groceries: '日用品', S
 const icons = { Dining: '食', Transport: '行', Groceries: '買', Shopping: '物', Bills: '單', Entertainment: '樂', Health: '健', FriendTransfer: '友', Other: '·', Uncategorized: '?' };
 const sources = { Cash: '現金', ApplePay: 'Apple Pay', Octopus: '八達通', BankTransfer: '銀行轉帳', FPS: 'FPS', PayMe: 'PayMe' };
 const fxChoiceLabel = o => `${o.label} ≈ HK$${Math.round(o.amountCents / 100).toLocaleString('en-HK')}`;
-function fxChoicesHtml(r) {
-  if (!r || !r.fx || !r.fx.ambiguous) return '';
-  return E.yenPreview(r.fx).map(o => `<button type="button" class="secondary fx-choice" data-fx-currency="${o.label}">${fxChoiceLabel(o)}${o.estimated ? '<small>估算</small>' : ''}</button>`).join('');
+const FX_SYMBOL = { USD: 'US$', TRY: '₺', JPY: '¥', CNY: 'RMB ', TWD: 'NT$', HKD: 'HK$' };
+function fxOriginal(fx) {
+  const zero = fx.currency === 'JPY', n = Number(fx.amount).toLocaleString('en-HK', { minimumFractionDigits: zero ? 0 : 2, maximumFractionDigits: zero ? 0 : 2 });
+  return (FX_SYMBOL[fx.currency] || fx.currency + ' ') + n;
 }
-function renderFxChoices(r) { const html = fxChoicesHtml(r); $('fx-choice-row').innerHTML = html; $('fx-choices').hidden = !html; }
+function editHeader(r, fallbackName) {
+  const hk = 'HK$' + (r.amountCents / 100).toLocaleString('en-HK', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  return r.fx ? `${fxOriginal(r.fx)}・暫計 ${hk}\n${fallbackName}` : `${fallbackName} · ${hk}`;
+}
+function fxChoicesHtml(r, selected) {
+  if (!r || !r.fx || !r.fx.ambiguous) return '';
+  return E.yenPreview(r.fx).map(o => `<button type="button" class="secondary fx-choice${selected === o.label ? ' selected' : ''}" aria-pressed="${selected === o.label}" data-fx-currency="${o.label}">${selected === o.label ? '✓ ' : ''}${fxChoiceLabel(o)}${o.estimated ? '<small>估算</small>' : ''}</button>`).join('');
+}
+let fxSelection = null;
+function renderFxChoices(r) { const html = fxChoicesHtml(r, fxSelection); $('fx-choice-row').innerHTML = html; $('fx-choices').hidden = !html; }
 const money = cents => (cents / 100).toLocaleString('en-HK', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 let state, busy = false, editId, toastTimer, entryMode = 'expense';
 let repaymentDraftEdited = false, pendingRepaymentAmount = null;
@@ -98,7 +108,7 @@ function row(r) {
   const title = reimbursement ? '朋友還款' + (r.payer ? ' · ' + r.payer : '') : r.merchant || r.note || sources[r.source];
   const detail = reimbursement ? `<p>原支出：${escape(expense.merchant || expense.note || sources[expense.source])} · ${E.hkDay(expense.timestamp)}</p>` : summary.reimbursedCents ? `<p>已收回 $${money(summary.reimbursedCents)} · 自付 $${money(summary.remainingCents)}</p>` : '';
   const controls = reimbursement ? `<span class="repayment-category">${names[category]} · 扣減支出</span><button data-original="${escape(expense.id)}">查看原支出 ↗</button>` : `<button data-edit="${escape(r.id)}" aria-label="修改 ${escape(title)} 分類">${names[category] || '待分類'} ↗</button>${summary.remainingCents > 0 ? `<button data-reimburse="${escape(r.id)}">記還款 ↗</button>` : '<span class="repayment-category">已全數收回</span>'}`;
-  return `<div class="tx-row${reimbursement ? ' repayment-row' : ''}" data-record="${escape(r.id)}"><span class="tx-icon" aria-hidden="true">${reimbursement ? '還' : icons[category] || '·'}</span><div class="tx-info"><strong>${escape(title)}</strong><p>${escape(date)} · ${sources[r.source]}${pending ? ' · 未同步' : ''}</p>${detail}</div><div class="tx-value"><strong>${reimbursement ? '−' : ''}$${money(r.amountCents)}</strong>${r.fx ? `<small class="fx-line">${escape((r.fx.currency === 'CNY' ? 'RMB' : r.fx.currency) + ' ' + r.fx.amount)}</small>${E.fxBadges(r.fx).map(b => `<button type="button" class="fx-badge fx-badge-${b.kind}" data-edit="${escape(r.id)}" aria-label="${b.label}：修改 ${escape(title)}">${b.label}</button>`).join('')}` : ''}${controls}</div></div>`;
+  return `<div class="tx-row${reimbursement ? ' repayment-row' : ''}" data-record="${escape(r.id)}"><span class="tx-icon" aria-hidden="true">${reimbursement ? '還' : icons[category] || '·'}</span><div class="tx-info"><strong>${escape(title)}</strong><p>${escape(date)} · ${sources[r.source]}${pending ? ' · 未同步' : ''}</p>${detail}</div><div class="tx-value"><strong>${reimbursement ? '−' : ''}$${money(r.amountCents)}</strong>${r.fx ? `<small class="fx-line">${escape((r.fx.currency === 'CNY' ? 'RMB' : r.fx.currency) + ' ' + r.fx.amount)}</small><span class="fx-badges">${E.fxBadges(r.fx).map(b => `<button type="button" class="fx-badge fx-badge-${b.kind}" data-edit="${escape(r.id)}" aria-label="${b.label}：修改 ${escape(title)}">${b.label}</button>`).join('')}</span>` : ''}${controls}</div></div>`;
 }
 function empty(title, description) { return `<div class="empty"><strong>${title}</strong>${description}</div>`; }
 async function refresh() { state = await S.read(); render(); }
@@ -244,23 +254,21 @@ async function start() {
     }
     const button = event.target.closest('[data-edit]'); if (!button) return;
     editId = button.dataset.edit; const r = state.transactions.find(t => t.id === editId);
-    $('edit-merchant').textContent = (r.merchant || r.note || sources[r.source]) + ' · $' + money(r.amountCents);
+    $('edit-merchant').textContent = editHeader(r, r.merchant || r.note || sources[r.source]);
     $('edit-category').value = r.category; $('remember').checked = false; $('remember').disabled = !r.merchantKey;
-    renderFxChoices(r);
+    fxSelection = null; renderFxChoices(r);
     $('category-dialog').showModal();
   });
-  $('fx-choice-row').addEventListener('click', async event => {
+  $('fx-choice-row').addEventListener('click', event => {
     const button = event.target.closest('[data-fx-currency]'); if (!button) return;
-    try {
-      const r = await S.mutate(s => S.fxSetCurrency(s, editId, button.dataset.fxCurrency));
-      $('category-dialog').close(); await changed();
-      notify(`已改為 ${button.dataset.fxCurrency} · HK$${money(r.amountCents)}` + (r.fx.estimated ? '（估算匯率）' : '')); synchronize();
-    } catch (err) { notify(err.message, true); }
+    // Selection only; nothing is applied or queued until 儲存.
+    fxSelection = fxSelection === button.dataset.fxCurrency ? null : button.dataset.fxCurrency;
+    renderFxChoices(state.transactions.find(t => t.id === editId));
   });
-  $('close-dialog').onclick = () => $('category-dialog').close();
+  $('close-dialog').onclick = () => { fxSelection = null; $('category-dialog').close(); };
   $('category-form').onsubmit = async event => {
     event.preventDefault();
-    try { await S.mutate(s => S.categorize(s, editId, $('edit-category').value, $('remember').checked)); $('category-dialog').close(); await changed(); notify('分類已更新'); synchronize(); }
+    try { const choice = fxSelection; const r = await S.mutate(s => S.saveEdit(s, editId, { category: $('edit-category').value, remember: $('remember').checked, currency: choice })); fxSelection = null; $('category-dialog').close(); await changed(); notify(choice ? `已儲存 · ${choice} · HK$${money(r.amountCents)}` + (r.fx.estimated ? '（估算匯率）' : '') : '已儲存'); synchronize(); }
     catch (err) { notify(err.message, true); }
   };
   $('settings-form').onsubmit = async event => {

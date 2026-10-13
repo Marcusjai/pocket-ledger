@@ -71,6 +71,15 @@
     Object.assign(r, updated);
     return r;
   }
+  // 儲存 in the edit dialog: apply an optional ¥ currency choice and the category together.
+  function saveEdit(state, id, { category, remember, currency } = {}) {
+    const r = state.transactions.find(t => t.id === id);
+    if (!r) throw new Error('搵唔到交易');
+    if (!E.CATEGORIES.includes(category)) throw new Error('分類不正確');
+    if (currency) fxSetCurrency(state, id, currency);
+    if (!currency || category !== r.category || remember) categorize(state, id, category, remember);
+    return r;
+  }
   function rememberRule(state, rule) {
     if (typeof rule.merchantKey !== 'string' || !rule.merchantKey || rule.merchantKey.length > 320 || E.merchantKey(rule.merchantKey) !== rule.merchantKey || !E.CATEGORIES.includes(rule.category)) throw new Error('分類規則格式不正確');
     state.rules = state.rules.filter(r => r.merchantKey !== rule.merchantKey);
@@ -252,5 +261,5 @@
       throw err;
     } finally { clearTimeout(timeout); }
   }
-  return { initial, uid, read, mutate, add, categorize, fxSetCurrency, rememberRule, rememberFpsRecipient, acknowledge, merge, resolveConflict, discardRejected, restore, sync, send, validEndpoint };
+  return { initial, uid, read, mutate, add, categorize, fxSetCurrency, saveEdit, rememberRule, rememberFpsRecipient, acknowledge, merge, resolveConflict, discardRejected, restore, sync, send, validEndpoint };
 });

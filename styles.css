@@ -13,3 +13,7 @@
 .fx-choice small { font-size: .7rem; font-weight: 500; color: #1d4ed8; }
 .fx-choice { padding: 12px 8px; white-space: nowrap; font-size: 15px; }
 .tx-value .fx-badge + .fx-badge { margin-left: 4px; }
+.fx-badges { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 4px; margin-top: 2px; }
+.tx-value .fx-badges .fx-badge { margin: 0; }
+.fx-choice.selected { background: #e0efea; border: 2px solid var(--teal); color: var(--teal); box-shadow: inset 0 0 0 1px var(--teal); }
+#edit-merchant { white-space: pre-line; }
