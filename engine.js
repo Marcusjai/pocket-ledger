@@ -20,6 +20,7 @@
     ['HKD', /^(?:HK\$|HKD)$/i]
   ];
   const ZERO_DECIMAL = ['JPY'];
+  const YEN_CHOICES = ['JPY', 'CNY'];
   // Rough fallback HKD rates, used only when the live rate API fails; such records are marked 待確認.
   const FALLBACK_HKD_RATE = { USD: 7.78, TRY: 0.19, JPY: 0.051, CNY: 1.09, TWD: 0.24, HKD: 1 };
   const BUILTINS = [
@@ -124,7 +125,41 @@
     const used = parsed.currency === 'HKD' ? 1 : live ? rate : FALLBACK_HKD_RATE[parsed.currency];
     const hkdCents = Math.max(1, Math.round(Number(parsed.amount) * used * 100));
     const pending = parsed.ambiguous || (parsed.currency !== 'HKD' && !live);
-    return { amount: (hkdCents / 100).toFixed(2), fx: parsed.currency === 'HKD' ? null : { currency: parsed.currency, amount: parsed.amount, rate: Number(used.toPrecision(6)), source: live ? 'open.er-api.com' : 'fallback', pending, ambiguous: !!parsed.ambiguous, estimated: parsed.currency !== 'HKD' && !live } };
+    const fx = parsed.currency === 'HKD' ? null : { currency: parsed.currency, amount: parsed.amount, rate: Number(used.toPrecision(6)), source: live ? 'open.er-api.com' : 'fallback', pending, ambiguous: !!parsed.ambiguous, estimated: parsed.currency !== 'HKD' && !live };
+    return { amount: (hkdCents / 100).toFixed(2), fx };
+  }
+  // Rate candidates for an ambiguous ¥ amount. rates: { JPY: number|null, CNY: number|null }.
+  function yenAlternatives(rates) {
+    const out = {};
+    for (const c of YEN_CHOICES) {
+      const r = rates && rates[c];
+      const live = typeof r === 'number' && Number.isFinite(r) && r > 0;
+      out[c] = { rate: Number((live ? r : FALLBACK_HKD_RATE[c]).toPrecision(6)), estimated: !live };
+    }
+    return out;
+  }
+  // HK$ preview for each ¥ choice, from stored/fresh alternatives (falls back to built-in rates).
+  function yenPreview(fx, alternatives) {
+    const alt = alternatives || (fx && fx.alternatives) || yenAlternatives({});
+    return YEN_CHOICES.map(c => ({ currency: c, label: c === 'CNY' ? 'RMB' : c, rate: alt[c].rate, estimated: alt[c].estimated, amountCents: Math.max(1, Math.round(Number(fx.amount) * alt[c].rate * 100)) }));
+  }
+  // Resolve an ambiguous ¥ record to JPY or CNY. Keeps the original fingerprint so create retries stay idempotent.
+  function applyCurrency(record, currency, rate, now, operationId, rows) {
+    const code = String(currency || '').toUpperCase() === 'RMB' ? 'CNY' : String(currency || '').toUpperCase();
+    if (!YEN_CHOICES.includes(code)) fail('INVALID_CURRENCY', '只可以揀 JPY 或 RMB');
+    if (!record || !record.fx) fail('NOT_FOUND', '呢筆唔係外幣記錄');
+    if (!record.fx.ambiguous) fail('NOT_AMBIGUOUS', '呢筆外幣記錄已確認幣種');
+    const live = typeof rate === 'number' && Number.isFinite(rate) && rate > 0;
+    const used = Number((live ? rate : FALLBACK_HKD_RATE[code]).toPrecision(6));
+    const amountCents = Math.max(1, Math.round(Number(record.fx.amount) * used * 100));
+    if (rows) {
+      const reimbursed = rows.filter(r => isReimbursement(r) && r.expenseId === record.id).reduce((n, r) => n + r.amountCents, 0);
+      if (amountCents < reimbursed) fail('OVER_REIMBURSEMENT', '新港幣金額少過已收回嘅還款，請先修改還款');
+    }
+    const fx = { currency: code, amount: record.fx.amount, rate: used, source: live ? 'open.er-api.com' : 'fallback', pending: !live, ambiguous: false, estimated: !live };
+    const note = String(record.note || '').replace(/(?:^| · )[A-Z]{3} [\d.]+ @[\d.]+(?: 待確認| 估算(?:匯率)?)*$/, '');
+    const label = code + ' ' + fx.amount + ' @' + used + (live ? '' : ' 估算');
+    return { ...record, amountCents, fx, note: note ? note + ' · ' + label : label, needsReview: record.category === 'Uncategorized', version: record.version + 1, updatedAt: now || new Date().toISOString(), lastOperationId: operationId || record.lastOperationId || '' };
   }
   // Badges for the transaction list. Old records with only pending/source still map correctly.
   function fxBadges(fx) {
@@ -133,7 +168,7 @@
     const ambiguous = fx.ambiguous === true || (fx.ambiguous == null && fx.pending === true && !estimated);
     const out = [];
     if (ambiguous) out.push({ kind: 'pending', label: '待確認' });
-    if (estimated) out.push({ kind: 'estimated', label: '估算匯率' });
+    if (estimated) out.push({ kind: 'estimated', label: '估算' });
     return out;
   }
   function classify(merchant, note, source, explicit, rules) {
@@ -182,6 +217,7 @@
       const f = input.fx;
       if (!FX_ALIASES.some(([c]) => c === f.currency && c !== 'HKD') || typeof f.amount !== 'string' || !/^\d{1,7}(\.\d{1,2})?$/.test(f.amount) || !(f.rate > 0)) fail('INVALID_INPUT', '外幣資料不正確');
       fx = { currency: f.currency, amount: f.amount, rate: f.rate, source: String(f.source || ''), pending: !!(f.pending || f.ambiguous || f.estimated), ambiguous: !!f.ambiguous, estimated: !!f.estimated };
+      if (fx.ambiguous && f.alternatives) fx.alternatives = yenAlternatives({ JPY: f.alternatives.JPY && !f.alternatives.JPY.estimated ? f.alternatives.JPY.rate : null, CNY: f.alternatives.CNY && !f.alternatives.CNY.estimated ? f.alternatives.CNY.rate : null });
       if (fx.pending) classification.needsReview = true;
     }
     const key = merchantKey(merchant);
@@ -244,5 +280,5 @@
     return { totalCents, todayCents, count, grossCents, reimbursedCents, byCategory, byDay };
   }
   function inputOf(r) { return { id: r.id, kind: r.kind || 'expense', ...(isReimbursement(r) ? { expenseId: r.expenseId, payer: r.payer } : {}), timestamp: r.timestamp, source: r.source, amount: (r.amountCents / 100).toFixed(2), currency: r.currency, merchant: r.merchant, account: r.account, note: r.note, category: r.category }; }
-  return { CATEGORIES, FRIEND_TRANSFER, FALLBACK_HKD_RATE, parseMoney, convertToHkd, fxBadges, SOURCES, REPAYMENT_SOURCES, isReimbursement, reimbursementSummary, categoryOf, merchantKey, cents, zonedTime, fpsRecipient, matchFpsRecipient, parseFpsNotification, classify, prepare, insert, hkDay, totals, inputOf, fail };
+  return { CATEGORIES, FRIEND_TRANSFER, FALLBACK_HKD_RATE, parseMoney, convertToHkd, fxBadges, yenAlternatives, yenPreview, applyCurrency, YEN_CHOICES, SOURCES, REPAYMENT_SOURCES, isReimbursement, reimbursementSummary, categoryOf, merchantKey, cents, zonedTime, fpsRecipient, matchFpsRecipient, parseFpsNotification, classify, prepare, insert, hkDay, totals, inputOf, fail };
 });

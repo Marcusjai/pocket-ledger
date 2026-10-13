@@ -4,6 +4,12 @@ const $ = id => document.getElementById(id);
 const names = { Dining: '餐飲', Transport: '交通', Groceries: '日用品', Shopping: '購物', Bills: '帳單', Entertainment: '娛樂', Health: '健康', FriendTransfer: '轉俾朋友', Other: '其他', Uncategorized: '待分類' };
 const icons = { Dining: '食', Transport: '行', Groceries: '買', Shopping: '物', Bills: '單', Entertainment: '樂', Health: '健', FriendTransfer: '友', Other: '·', Uncategorized: '?' };
 const sources = { Cash: '現金', ApplePay: 'Apple Pay', Octopus: '八達通', BankTransfer: '銀行轉帳', FPS: 'FPS', PayMe: 'PayMe' };
+const fxChoiceLabel = o => `${o.label} ≈ HK$${Math.round(o.amountCents / 100).toLocaleString('en-HK')}`;
+function fxChoicesHtml(r) {
+  if (!r || !r.fx || !r.fx.ambiguous) return '';
+  return E.yenPreview(r.fx).map(o => `<button type="button" class="secondary fx-choice" data-fx-currency="${o.label}">${fxChoiceLabel(o)}${o.estimated ? '<small>估算</small>' : ''}</button>`).join('');
+}
+function renderFxChoices(r) { const html = fxChoicesHtml(r); $('fx-choice-row').innerHTML = html; $('fx-choices').hidden = !html; }
 const money = cents => (cents / 100).toLocaleString('en-HK', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 let state, busy = false, editId, toastTimer, entryMode = 'expense';
 let repaymentDraftEdited = false, pendingRepaymentAmount = null;
@@ -240,7 +246,16 @@ async function start() {
     editId = button.dataset.edit; const r = state.transactions.find(t => t.id === editId);
     $('edit-merchant').textContent = (r.merchant || r.note || sources[r.source]) + ' · $' + money(r.amountCents);
     $('edit-category').value = r.category; $('remember').checked = false; $('remember').disabled = !r.merchantKey;
+    renderFxChoices(r);
     $('category-dialog').showModal();
+  });
+  $('fx-choice-row').addEventListener('click', async event => {
+    const button = event.target.closest('[data-fx-currency]'); if (!button) return;
+    try {
+      const r = await S.mutate(s => S.fxSetCurrency(s, editId, button.dataset.fxCurrency));
+      $('category-dialog').close(); await changed();
+      notify(`已改為 ${button.dataset.fxCurrency} · HK$${money(r.amountCents)}` + (r.fx.estimated ? '（估算匯率）' : '')); synchronize();
+    } catch (err) { notify(err.message, true); }
   });
   $('close-dialog').onclick = () => $('category-dialog').close();
   $('category-form').onsubmit = async event => {

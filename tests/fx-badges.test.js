@@ -8,7 +8,7 @@ const app = fs.readFileSync(path.join(__dirname, '../app.js'), 'utf8');
 const css = fs.readFileSync(path.join(__dirname, '../styles.css'), 'utf8');
 test('engine maps fx to distinct badges', () => {
   assert.deepEqual(E.fxBadges({ pending: true, ambiguous: true, estimated: false }), [{ kind: 'pending', label: '待確認' }]);
-  assert.deepEqual(E.fxBadges({ pending: true, ambiguous: false, estimated: true }), [{ kind: 'estimated', label: '估算匯率' }]);
+  assert.deepEqual(E.fxBadges({ pending: true, ambiguous: false, estimated: true }), [{ kind: 'estimated', label: '估算' }]);
   assert.deepEqual(E.fxBadges({ pending: false, ambiguous: false, estimated: false }), []);
   assert.deepEqual(E.fxBadges(undefined), []);
 });

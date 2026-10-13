@@ -67,7 +67,7 @@
     <nav aria-label="主要選單"><button data-view="dashboard" class="active"><span aria-hidden="true">▥</span>總覽</button><button data-view="add"><span aria-hidden="true">＋</span>記一筆</button><button data-view="review"><span aria-hidden="true">☷</span>待分類 <b id="review-badge" hidden>0</b></button><button data-view="settings"><span aria-hidden="true">⚙</span>設定</button></nav>
   </div>
   <div id="toast" class="toast" role="status" hidden></div>
-  <dialog id="category-dialog"><form id="category-form"><h2>修改分類</h2><p id="edit-merchant"></p><label for="edit-category">分類</label><select id="edit-category"></select><label class="check-label"><input id="remember" type="checkbox">下次遇到呢間商戶，使用此分類</label><div class="actions"><button type="submit" class="primary">儲存分類</button><button type="button" id="close-dialog" class="quiet">取消</button></div></form></dialog>
+  <dialog id="category-dialog"><form id="category-form"><h2>修改分類</h2><p id="edit-merchant"></p><div id="fx-choices" class="fx-choices" hidden><p class="hint">呢筆係「¥」，請揀實際幣種：</p><div class="fx-choice-row" id="fx-choice-row"></div></div><label for="edit-category">分類</label><select id="edit-category"></select><label class="check-label"><input id="remember" type="checkbox">下次遇到呢間商戶，使用此分類</label><div class="actions"><button type="submit" class="primary">儲存分類</button><button type="button" id="close-dialog" class="quiet">取消</button></div></form></dialog>
   <noscript>請開啟 JavaScript 以使用袋住記。</noscript>
 </body>
 </html>

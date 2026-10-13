@@ -60,6 +60,17 @@
       state.rules.push({ merchantKey: r.merchantKey, category });
     }
   }
+  // Resolve an ambiguous ¥ record locally (immediately), then queue it for the server, which re-converts with a fresh rate.
+  function fxSetCurrency(state, id, currency) {
+    const r = state.transactions.find(t => t.id === id);
+    if (!r) throw new Error('搵唔到交易');
+    const code = currency === 'RMB' ? 'CNY' : currency;
+    const alt = r.fx && r.fx.alternatives && r.fx.alternatives[code];
+    const updated = E.applyCurrency(r, code, alt && !alt.estimated ? alt.rate : null, new Date().toISOString(), '', state.transactions);
+    state.outbox.push({ action: 'fxSetCurrency', operationId: uid(), id, currency: code === 'CNY' ? 'RMB' : code });
+    Object.assign(r, updated);
+    return r;
+  }
   function rememberRule(state, rule) {
     if (typeof rule.merchantKey !== 'string' || !rule.merchantKey || rule.merchantKey.length > 320 || E.merchantKey(rule.merchantKey) !== rule.merchantKey || !E.CATEGORIES.includes(rule.category)) throw new Error('分類規則格式不正確');
     state.rules = state.rules.filter(r => r.merchantKey !== rule.merchantKey);
@@ -92,7 +103,15 @@
       if (next.action === 'categorize') { next.id = remote.id; next.version = version++; }
     }
     const latest = pending.filter(x => x.action === 'categorize').at(-1);
-    const row = latest ? { ...remote, category: latest.category, needsReview: latest.category === 'Uncategorized', version } : remote;
+    let row = latest ? { ...remote, category: latest.category, needsReview: latest.category === 'Uncategorized', version } : remote;
+    // Keep a still-queued currency choice visible while earlier operations are acknowledged.
+    for (const next of pending) if (next.action === 'fxSetCurrency') {
+      next.id = remote.id;
+      if (row.fx && row.fx.ambiguous) {
+        const code = next.currency === 'RMB' ? 'CNY' : next.currency, alt = row.fx.alternatives && row.fx.alternatives[code];
+        try { row = E.applyCurrency(row, code, alt && !alt.estimated ? alt.rate : null, row.updatedAt, row.lastOperationId); } catch (_) { /* server will decide */ }
+      }
+    }
     state.transactions = state.transactions.filter(t => t.id !== oldId && t.id !== remote.id);
     state.transactions.push(row);
   }
@@ -233,5 +252,5 @@
       throw err;
     } finally { clearTimeout(timeout); }
   }
-  return { initial, uid, read, mutate, add, categorize, rememberRule, rememberFpsRecipient, acknowledge, merge, resolveConflict, discardRejected, restore, sync, send, validEndpoint };
+  return { initial, uid, read, mutate, add, categorize, fxSetCurrency, rememberRule, rememberFpsRecipient, acknowledge, merge, resolveConflict, discardRejected, restore, sync, send, validEndpoint };
 });
