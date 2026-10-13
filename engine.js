@@ -5,10 +5,23 @@
   root.ExpenseEngine = api;
 })(typeof globalThis !== 'undefined' ? globalThis : this, function () {
   'use strict';
-  const CATEGORIES = ['Dining', 'Transport', 'Groceries', 'Shopping', 'Bills', 'Entertainment', 'Health', 'Other', 'Uncategorized'];
+  const CATEGORIES = ['Dining', 'Transport', 'Groceries', 'Shopping', 'Bills', 'Entertainment', 'Health', 'FriendTransfer', 'Other', 'Uncategorized'];
   const SOURCES = ['Cash', 'ApplePay', 'Octopus', 'FPS'];
   const REPAYMENT_SOURCES = ['BankTransfer', 'FPS', 'PayMe', 'Cash'];
   const isReimbursement = r => r.kind === 'reimbursement';
+  const FRIEND_TRANSFER = 'FriendTransfer'; // 轉俾朋友
+  // Supported foreign currencies. Ambiguous bare ¥ is treated as JPY and flagged 待確認.
+  const FX_ALIASES = [
+    ['USD', /^(?:US\$|USD|U\.S\.\$)$/i],
+    ['TRY', /^(?:TRY|TL|₺)$/i],
+    ['JPY', /^(?:JPY|JP¥|JP￥|円)$/i],
+    ['CNY', /^(?:RMB|CNY|CN¥|CN￥|人民幣|人民币)$/i],
+    ['TWD', /^(?:NT\$|NTD|TWD)$/i],
+    ['HKD', /^(?:HK\$|HKD)$/i]
+  ];
+  const ZERO_DECIMAL = ['JPY'];
+  // Rough fallback HKD rates, used only when the live rate API fails; such records are marked 待確認.
+  const FALLBACK_HKD_RATE = { USD: 7.78, TRY: 0.19, JPY: 0.051, CNY: 1.09, TWD: 0.24, HKD: 1 };
   const BUILTINS = [
     ['Dining', /^(mcdonalds|麥當勞|kfc|肯德基|starbucks|星巴克|cafe de coral|大家樂|fairwood|大快活|pret a manger)(\b|\s|$)/i],
     ['Transport', /^(mtr|港鐵|kmb|九巴|citybus|城巴|uber|taxi|的士|tram|電車)(\b|\s|$)/i],
@@ -74,6 +87,45 @@
     const notificationTimestamp = zonedTime(input.notificationTimestamp);
     return { recipient, amount, timestamp, notificationTimestamp, identity: JSON.stringify(['hang-seng-fps', body, notificationTimestamp]) };
   }
+  // Parse a Wallet notification amount such as "US$29.99", "JPY 12,000", "₺1.234,50" or "¥1,200".
+  function parseMoney(raw) {
+    if (typeof raw !== 'string' || raw.length > 64) return null;
+    const t = raw.normalize('NFKC').replace(/\u00a0/g, ' ').trim().replace(/^-\s*/, '-');
+    const m = /^(-)?\s*([^\d\s.,-]{1,4}?\$?|[A-Za-z]{2,3}\$|[A-Za-z]{2}¥)\s*([\d.,]+)\s*([A-Za-z]{3})?$/.exec(t) || /^(-)?\s*()([\d.,]+)\s*([A-Za-z]{3}|₺|円|TL)$/.exec(t);
+    if (!m) return null;
+    const negative = !!m[1];
+    let symbol = (m[2] || m[4] || '').trim();
+    let currency = null, ambiguous = false;
+    if (symbol === '¥' || symbol === '￥') { currency = 'JPY'; ambiguous = true; }
+    else if (symbol === '$') return null; // bare $ is not identifiable
+    else for (const [code, re] of FX_ALIASES) if (re.test(symbol)) { currency = code; break; }
+    if (!currency) return null;
+    const amount = normaliseNumber(m[3], currency);
+    if (amount == null) return null;
+    return { currency, amount, ambiguous, negative };
+  }
+  function normaliseNumber(n, currency) {
+    let s = n;
+    if (/^\d{1,3}(,\d{3})+(\.\d{1,2})?$/.test(s)) s = s.replace(/,/g, '');
+    else if (/^\d{1,3}(\.\d{3})+(,\d{1,2})?$/.test(s)) s = s.replace(/\./g, '').replace(',', '.'); // 1.234,50 / NT$1.234
+    else if (/^\d+,\d{1,2}$/.test(s)) s = s.replace(',', '.');
+    else if (!/^\d+(\.\d{1,2})?$/.test(s)) return null;
+    if (ZERO_DECIMAL.includes(currency) && s.includes('.')) {
+      if (!/\.0{1,2}$/.test(s)) return null;
+      s = s.replace(/\.0+$/, '');
+    }
+    const v = Number(s);
+    if (!Number.isFinite(v) || v <= 0 || v > 9999999.99) return null;
+    return ZERO_DECIMAL.includes(currency) ? String(Math.round(v)) : v.toFixed(2);
+  }
+  // rate = HKD per 1 unit of currency, or null when unavailable.
+  function convertToHkd(parsed, rate) {
+    const live = typeof rate === 'number' && Number.isFinite(rate) && rate > 0;
+    const used = parsed.currency === 'HKD' ? 1 : live ? rate : FALLBACK_HKD_RATE[parsed.currency];
+    const hkdCents = Math.max(1, Math.round(Number(parsed.amount) * used * 100));
+    const pending = parsed.ambiguous || (parsed.currency !== 'HKD' && !live);
+    return { amount: (hkdCents / 100).toFixed(2), fx: parsed.currency === 'HKD' ? null : { currency: parsed.currency, amount: parsed.amount, rate: Number(used.toPrecision(6)), source: live ? 'open.er-api.com' : 'fallback', pending } };
+  }
   function classify(merchant, note, source, explicit, rules) {
     const key = merchantKey(merchant);
     if (explicit && explicit !== 'Auto') {
@@ -115,10 +167,17 @@
     const account = text(input.account, 64, '卡別名');
     const amountCents = cents(input.amount);
     const classification = reimbursement ? { category: 'Uncategorized', needsReview: false } : classify(merchant, note, source, input.category, rules);
+    let fx = null;
+    if (input.fx && !reimbursement) {
+      const f = input.fx;
+      if (!FX_ALIASES.some(([c]) => c === f.currency && c !== 'HKD') || typeof f.amount !== 'string' || !/^\d{1,7}(\.\d{1,2})?$/.test(f.amount) || !(f.rate > 0)) fail('INVALID_INPUT', '外幣資料不正確');
+      fx = { currency: f.currency, amount: f.amount, rate: f.rate, source: String(f.source || ''), pending: !!f.pending };
+      if (fx.pending) classification.needsReview = true;
+    }
     const key = merchantKey(merchant);
     // Preserve v1 expense fingerprints so existing IDs and queued retries remain valid.
     const fingerprint = JSON.stringify(reimbursement ? ['reimbursement', expenseId, source, canonicalTime, amountCents, currency, merchantKey(payer), account] : [source, canonicalTime, amountCents, currency, key, account]);
-    return { id, kind, ...(reimbursement ? { expenseId, payer } : {}), timestamp: canonicalTime, source, amountCents, currency, merchant, merchantKey: key, account, note, ...classification, fingerprint, version: 1, updatedAt: now || new Date().toISOString(), lastOperationId: '' };
+    return { id, kind, ...(reimbursement ? { expenseId, payer } : {}), timestamp: canonicalTime, source, amountCents, currency, merchant, merchantKey: key, account, note, ...classification, ...(fx ? { fx } : {}), fingerprint, version: 1, updatedAt: now || new Date().toISOString(), lastOperationId: '' };
   }
   function insert(rows, input, rules, now) {
     if (!input || typeof input !== 'object' || Array.isArray(input)) fail('INVALID_INPUT', '交易格式不正確');
@@ -175,5 +234,5 @@
     return { totalCents, todayCents, count, grossCents, reimbursedCents, byCategory, byDay };
   }
   function inputOf(r) { return { id: r.id, kind: r.kind || 'expense', ...(isReimbursement(r) ? { expenseId: r.expenseId, payer: r.payer } : {}), timestamp: r.timestamp, source: r.source, amount: (r.amountCents / 100).toFixed(2), currency: r.currency, merchant: r.merchant, account: r.account, note: r.note, category: r.category }; }
-  return { CATEGORIES, SOURCES, REPAYMENT_SOURCES, isReimbursement, reimbursementSummary, categoryOf, merchantKey, cents, zonedTime, fpsRecipient, matchFpsRecipient, parseFpsNotification, classify, prepare, insert, hkDay, totals, inputOf, fail };
+  return { CATEGORIES, FRIEND_TRANSFER, FALLBACK_HKD_RATE, parseMoney, convertToHkd, SOURCES, REPAYMENT_SOURCES, isReimbursement, reimbursementSummary, categoryOf, merchantKey, cents, zonedTime, fpsRecipient, matchFpsRecipient, parseFpsNotification, classify, prepare, insert, hkDay, totals, inputOf, fail };
 });

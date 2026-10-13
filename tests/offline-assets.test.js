@@ -31,8 +31,8 @@ test('offline shell contains every versioned script and stylesheet in HTML', () 
     assert.ok(fs.existsSync(path.join(root, file)), `Missing asset file: ${file}`);
   }
   assert.notEqual(cache, 'pocket-ledger-shell-36d71b8a93ed');
-  assert.match(html, /Pocket Ledger v1\.2\.2/);
-  assert.match(html, /<meta name="pocket-ledger-release" content="repayment-prefill-2">/);
+  assert.match(html, /Pocket Ledger v1\.3\.0/);
+  assert.match(html, /<meta name="pocket-ledger-release" content="fx-fps-1">/);
 });
 
 test('installation caches the complete matching shell', async () => {
@@ -55,10 +55,10 @@ test('installation caches the complete matching shell', async () => {
 test('activation removes only older Pocket Ledger shell caches', async () => {
   let completed;
   const removed = [];
-  const { handlers, cache } = worker({ caches: { keys: async () => ['pocket-ledger-shell-36d71b8a93ed', 'pocket-ledger-shell-repayment-prefill-1', 'pocket-ledger-shell-repayment-prefill-2', 'other-app'], delete: async key => { removed.push(key); } } });
+  const { handlers, cache } = worker({ caches: { keys: async () => ['pocket-ledger-shell-36d71b8a93ed', 'pocket-ledger-shell-repayment-prefill-1', 'pocket-ledger-shell-repayment-prefill-2', 'pocket-ledger-shell-fx-fps-1', 'other-app'], delete: async key => { removed.push(key); } } });
   handlers.activate({ waitUntil: promise => { completed = promise; } });
   await completed;
-  assert.deepEqual(removed, ['pocket-ledger-shell-36d71b8a93ed', 'pocket-ledger-shell-repayment-prefill-1']);
+  assert.deepEqual(removed, ['pocket-ledger-shell-36d71b8a93ed', 'pocket-ledger-shell-repayment-prefill-1', 'pocket-ledger-shell-repayment-prefill-2']);
   assert.ok(!removed.includes(cache));
 });
 
@@ -74,7 +74,7 @@ test('worker leaves cross-origin and non-GET transaction requests alone', () => 
 test('navigation serves the cached HTML from the active release', async () => {
   let response;
   const { handlers } = worker({ caches: { open: async name => {
-    assert.equal(name, 'pocket-ledger-shell-repayment-prefill-2');
+    assert.equal(name, 'pocket-ledger-shell-fx-fps-1');
     return { match: async key => { assert.equal(key, './index.html'); return 'cached release HTML'; } };
   } } });
   handlers.fetch({ request: { url: 'https://example.invalid/#reimburse?amount=12.34', method: 'GET', mode: 'navigate' }, respondWith: promise => { response = promise; } });

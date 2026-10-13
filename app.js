@@ -1,8 +1,8 @@
 'use strict';
 const E = ExpenseEngine, S = LedgerStore;
 const $ = id => document.getElementById(id);
-const names = { Dining: '餐飲', Transport: '交通', Groceries: '日用品', Shopping: '購物', Bills: '帳單', Entertainment: '娛樂', Health: '健康', Other: '其他', Uncategorized: '待分類' };
-const icons = { Dining: '食', Transport: '行', Groceries: '買', Shopping: '物', Bills: '單', Entertainment: '樂', Health: '健', Other: '·', Uncategorized: '?' };
+const names = { Dining: '餐飲', Transport: '交通', Groceries: '日用品', Shopping: '購物', Bills: '帳單', Entertainment: '娛樂', Health: '健康', FriendTransfer: '轉俾朋友', Other: '其他', Uncategorized: '待分類' };
+const icons = { Dining: '食', Transport: '行', Groceries: '買', Shopping: '物', Bills: '單', Entertainment: '樂', Health: '健', FriendTransfer: '友', Other: '·', Uncategorized: '?' };
 const sources = { Cash: '現金', ApplePay: 'Apple Pay', Octopus: '八達通', BankTransfer: '銀行轉帳', FPS: 'FPS', PayMe: 'PayMe' };
 const money = cents => (cents / 100).toLocaleString('en-HK', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 let state, busy = false, editId, toastTimer, entryMode = 'expense';
@@ -92,7 +92,7 @@ function row(r) {
   const title = reimbursement ? '朋友還款' + (r.payer ? ' · ' + r.payer : '') : r.merchant || r.note || sources[r.source];
   const detail = reimbursement ? `<p>原支出：${escape(expense.merchant || expense.note || sources[expense.source])} · ${E.hkDay(expense.timestamp)}</p>` : summary.reimbursedCents ? `<p>已收回 $${money(summary.reimbursedCents)} · 自付 $${money(summary.remainingCents)}</p>` : '';
   const controls = reimbursement ? `<span class="repayment-category">${names[category]} · 扣減支出</span><button data-original="${escape(expense.id)}">查看原支出 ↗</button>` : `<button data-edit="${escape(r.id)}" aria-label="修改 ${escape(title)} 分類">${names[category] || '待分類'} ↗</button>${summary.remainingCents > 0 ? `<button data-reimburse="${escape(r.id)}">記還款 ↗</button>` : '<span class="repayment-category">已全數收回</span>'}`;
-  return `<div class="tx-row${reimbursement ? ' repayment-row' : ''}" data-record="${escape(r.id)}"><span class="tx-icon" aria-hidden="true">${reimbursement ? '還' : icons[category] || '·'}</span><div class="tx-info"><strong>${escape(title)}</strong><p>${escape(date)} · ${sources[r.source]}${pending ? ' · 未同步' : ''}</p>${detail}</div><div class="tx-value"><strong>${reimbursement ? '−' : ''}$${money(r.amountCents)}</strong>${controls}</div></div>`;
+  return `<div class="tx-row${reimbursement ? ' repayment-row' : ''}" data-record="${escape(r.id)}"><span class="tx-icon" aria-hidden="true">${reimbursement ? '還' : icons[category] || '·'}</span><div class="tx-info"><strong>${escape(title)}</strong><p>${escape(date)} · ${sources[r.source]}${pending ? ' · 未同步' : ''}</p>${detail}</div><div class="tx-value"><strong>${reimbursement ? '−' : ''}$${money(r.amountCents)}</strong>${r.fx ? `<small class="fx-line">${escape(r.fx.currency + ' ' + r.fx.amount)}${r.fx.pending ? ' · 待確認' : ''}</small>` : ''}${controls}</div></div>`;
 }
 function empty(title, description) { return `<div class="empty"><strong>${title}</strong>${description}</div>`; }
 async function refresh() { state = await S.read(); render(); }
@@ -286,7 +286,7 @@ async function start() {
   $('csv').onclick = async () => {
     const latest = await S.read();
     const cell = v => { let s = String(v ?? ''); if (/^[\s]*[=+\-@]/.test(s)) s = "'" + s; return '"' + s.replace(/"/g, '""') + '"'; };
-    const rows = [['ID', 'Timestamp', 'Source', 'Amount', 'Currency', 'Merchant', 'Category', 'Note', 'Kind', 'ExpenseID', 'Payer'], ...latest.transactions.map(r => [r.id, r.timestamp, r.source, (E.isReimbursement(r) ? -1 : 1) * r.amountCents / 100, r.currency, r.merchant, E.categoryOf(r, latest.transactions), r.note, r.kind || 'expense', r.expenseId || '', r.payer || ''])];
+    const rows = [['ID', 'Timestamp', 'Source', 'Amount', 'Currency', 'Merchant', 'Category', 'Note', 'Kind', 'ExpenseID', 'Payer', 'OrigCurrency', 'OrigAmount', 'FxRate'], ...latest.transactions.map(r => [r.id, r.timestamp, r.source, (E.isReimbursement(r) ? -1 : 1) * r.amountCents / 100, r.currency, r.merchant, E.categoryOf(r, latest.transactions), r.note, r.kind || 'expense', r.expenseId || '', r.payer || '', r.fx ? r.fx.currency : '', r.fx ? r.fx.amount : '', r.fx ? r.fx.rate : ''])];
     download('\ufeff' + rows.map(r => r.map(v => typeof v === 'number' ? v.toFixed(2) : cell(v)).join(',')).join('\r\n'), 'pocket-ledger.csv', 'text/csv;charset=utf-8');
   };
   $('import').onchange = async event => {
