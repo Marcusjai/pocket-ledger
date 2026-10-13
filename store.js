@@ -116,7 +116,7 @@
     // Keep a still-queued currency choice visible while earlier operations are acknowledged.
     for (const next of pending) if (next.action === 'fxSetCurrency') {
       next.id = remote.id;
-      if (row.fx && row.fx.ambiguous) {
+      if (row.fx && E.isYen(row.fx)) {
         const code = next.currency === 'RMB' ? 'CNY' : next.currency, alt = row.fx.alternatives && row.fx.alternatives[code];
         try { row = E.applyCurrency(row, code, alt && !alt.estimated ? alt.rate : null, row.updatedAt, row.lastOperationId); } catch (_) { /* server will decide */ }
       }

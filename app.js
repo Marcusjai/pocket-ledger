@@ -14,13 +14,15 @@ function editHeader(r, fallbackName, selected) {
   const hkOf = c => 'HK$' + (c / 100).toLocaleString('en-HK', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   if (!r.fx) return `${fallbackName} · ${hkOf(r.amountCents)}`;
   // A selected ¥ currency previews its converted amount; nothing is saved until 儲存.
-  const choice = selected && r.fx.ambiguous ? E.yenPreview(r.fx).find(o => o.label === selected) : null;
+  const curLabel = r.fx.ambiguous ? null : (r.fx.currency === 'CNY' ? 'RMB' : r.fx.currency);
+  const choice = selected && selected !== curLabel && E.isYen(r.fx) ? E.yenPreview(r.fx).find(o => o.label === selected) : null;
   if (choice) return `${fxOriginal({ ...r.fx, currency: choice.currency })}・${choice.estimated ? '估算' : '換算'} ${hkOf(choice.amountCents)}\n${fallbackName} · 未儲存`;
   return `${fxOriginal(r.fx)}・暫計 ${hkOf(r.amountCents)}\n${fallbackName}`;
 }
 function fxChoicesHtml(r, selected) {
-  if (!r || !r.fx || !r.fx.ambiguous) return '';
-  return E.yenPreview(r.fx).map(o => `<button type="button" class="secondary fx-choice${selected === o.label ? ' selected' : ''}" aria-pressed="${selected === o.label}" data-fx-currency="${o.label}">${selected === o.label ? '✓ ' : ''}${fxChoiceLabel(o)}${o.estimated ? '<small>估算</small>' : ''}</button>`).join('');
+  if (!r || !E.isYen(r.fx)) return '';
+  const current = r.fx.ambiguous ? null : (r.fx.currency === 'CNY' ? 'RMB' : r.fx.currency);
+  return E.yenPreview(r.fx).map(o => `<button type="button" class="secondary fx-choice${selected === o.label ? ' selected' : ''}${current === o.label ? ' current' : ''}" aria-pressed="${selected === o.label}" data-fx-currency="${o.label}">${selected === o.label || (!selected && current === o.label) ? '✓ ' : ''}${fxChoiceLabel(o)}${o.estimated ? '<small>估算</small>' : ''}</button>`).join('');
 }
 let fxSelection = null;
 function renderFxChoices(r) { $('edit-merchant').textContent = editHeader(r, r.merchant || r.note || sources[r.source], fxSelection); const html = fxChoicesHtml(r, fxSelection); $('fx-choice-row').innerHTML = html; $('fx-choices').hidden = !html; }
@@ -260,7 +262,7 @@ async function start() {
     editId = button.dataset.edit; const r = state.transactions.find(t => t.id === editId);
     $('edit-merchant').textContent = editHeader(r, r.merchant || r.note || sources[r.source]);
     $('edit-category').value = r.category; $('remember').checked = false; $('remember').disabled = !r.merchantKey;
-    fxSelection = null; renderFxChoices(r);
+    fxSelection = r.fx && E.isYen(r.fx) && !r.fx.ambiguous ? (r.fx.currency === 'CNY' ? 'RMB' : r.fx.currency) : null; renderFxChoices(r);
     $('category-dialog').showModal();
   });
   $('fx-choice-row').addEventListener('click', event => {
@@ -272,7 +274,7 @@ async function start() {
   $('close-dialog').onclick = () => { fxSelection = null; $('category-dialog').close(); };
   $('category-form').onsubmit = async event => {
     event.preventDefault();
-    try { const choice = fxSelection; const r = await S.mutate(s => S.saveEdit(s, editId, { category: $('edit-category').value, remember: $('remember').checked, currency: choice })); fxSelection = null; $('category-dialog').close(); await changed(); notify(choice ? `已儲存 · ${choice} · HK$${money(r.amountCents)}` + (r.fx.estimated ? '（估算匯率）' : '') : '已儲存'); synchronize(); }
+    try { const r0 = state.transactions.find(t => t.id === editId); const cur = r0 && r0.fx && !r0.fx.ambiguous ? (r0.fx.currency === 'CNY' ? 'RMB' : r0.fx.currency) : null; const choice = fxSelection && fxSelection !== cur ? fxSelection : null; const r = await S.mutate(s => S.saveEdit(s, editId, { category: $('edit-category').value, remember: $('remember').checked, currency: choice })); fxSelection = null; $('category-dialog').close(); await changed(); notify(choice ? `已儲存 · ${choice} · HK$${money(r.amountCents)}` + (r.fx.estimated ? '（估算匯率）' : '') : '已儲存'); synchronize(); }
     catch (err) { notify(err.message, true); }
   };
   $('settings-form').onsubmit = async event => {

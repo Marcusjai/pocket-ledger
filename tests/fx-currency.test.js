@@ -31,7 +31,11 @@ test('edit dialog shows two side-by-side buttons labelled with converted HK$', (
   assert.doesNotMatch(out, /<select/);
   assert.match(html, /id="fx-choices"[^>]*hidden/);
   assert.match(css, /\.fx-choice-row\s*\{[^}]*grid-template-columns:\s*1fr 1fr/);
-  assert.equal(helpers().fxChoicesHtml({ ...yenRecord(), fx: { ...yenRecord().fx, ambiguous: false } }), '');
+  assert.equal(helpers().fxChoicesHtml({ ...yenRecord(), fx: { ...yenRecord().fx, ambiguous: false, yen: undefined } }), "");
+  // A resolved ¥ record still offers both buttons, current one ticked.
+  const resolved = helpers().fxChoicesHtml({ ...yenRecord(), fx: { ...yenRecord().fx, currency: "CNY", ambiguous: false, yen: true } });
+  assert.match(resolved, /fx-choice current"[^>]*data-fx-currency="RMB">✓ RMB/);
+  assert.match(resolved, /data-fx-currency="JPY">JPY/);
 });
 
 test('JPY -> RMB locally: HKD amount and rate update immediately, 待確認 removed, op queued', () => {
@@ -42,7 +46,13 @@ test('JPY -> RMB locally: HKD amount and rate update immediately, 待確認 remo
   assert.equal(r.amountCents, 129600); assert.equal(r.fx.currency, 'CNY'); assert.equal(r.fx.rate, 1.08);
   assert.deepEqual(E.fxBadges(r.fx), []);
   assert.equal(s.outbox.length, 1); assert.equal(s.outbox[0].action, 'fxSetCurrency'); assert.equal(s.outbox[0].currency, 'RMB');
-  assert.throws(() => S.fxSetCurrency(s, r.id, 'JPY'), /已確認/);
+  // Mis-tap can be fixed: change back to JPY.
+  S.fxSetCurrency(s, r.id, "JPY");
+  assert.equal(r.fx.currency, "JPY"); assert.equal(r.amountCents, 6240); assert.equal(r.fx.yen, true);
+  assert.deepEqual(E.fxBadges(r.fx), []); assert.equal(s.outbox.length, 2);
+  const usd = { ...yenRecord(), id: "u1", fx: { currency: "USD", amount: "10", rate: 7.8, ambiguous: false, pending: false, estimated: false } };
+  s.transactions.push(usd);
+  assert.throws(() => S.fxSetCurrency(s, "u1", "JPY"), /已確認/);
 });
 
 test('no live alternative rate -> fallback and 估算 badge', () => {

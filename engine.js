@@ -125,7 +125,7 @@
     const used = parsed.currency === 'HKD' ? 1 : live ? rate : FALLBACK_HKD_RATE[parsed.currency];
     const hkdCents = Math.max(1, Math.round(Number(parsed.amount) * used * 100));
     const pending = parsed.ambiguous || (parsed.currency !== 'HKD' && !live);
-    const fx = parsed.currency === 'HKD' ? null : { currency: parsed.currency, amount: parsed.amount, rate: Number(used.toPrecision(6)), source: live ? 'open.er-api.com' : 'fallback', pending, ambiguous: !!parsed.ambiguous, estimated: parsed.currency !== 'HKD' && !live };
+    const fx = parsed.currency === 'HKD' ? null : { currency: parsed.currency, amount: parsed.amount, rate: Number(used.toPrecision(6)), source: live ? 'open.er-api.com' : 'fallback', pending, ambiguous: !!parsed.ambiguous, estimated: parsed.currency !== 'HKD' && !live, ...(parsed.ambiguous ? { yen: true } : {}) };
     return { amount: (hkdCents / 100).toFixed(2), fx };
   }
   // Rate candidates for an ambiguous ¥ amount. rates: { JPY: number|null, CNY: number|null }.
@@ -148,7 +148,7 @@
     const code = String(currency || '').toUpperCase() === 'RMB' ? 'CNY' : String(currency || '').toUpperCase();
     if (!YEN_CHOICES.includes(code)) fail('INVALID_CURRENCY', '只可以揀 JPY 或 RMB');
     if (!record || !record.fx) fail('NOT_FOUND', '呢筆唔係外幣記錄');
-    if (!record.fx.ambiguous) fail('NOT_AMBIGUOUS', '呢筆外幣記錄已確認幣種');
+    if (!isYen(record.fx)) fail('NOT_AMBIGUOUS', '呢筆外幣記錄已確認幣種');
     const live = typeof rate === 'number' && Number.isFinite(rate) && rate > 0;
     const used = Number((live ? rate : FALLBACK_HKD_RATE[code]).toPrecision(6));
     const amountCents = Math.max(1, Math.round(Number(record.fx.amount) * used * 100));
@@ -156,11 +156,13 @@
       const reimbursed = rows.filter(r => isReimbursement(r) && r.expenseId === record.id).reduce((n, r) => n + r.amountCents, 0);
       if (amountCents < reimbursed) fail('OVER_REIMBURSEMENT', '新港幣金額少過已收回嘅還款，請先修改還款');
     }
-    const fx = { currency: code, amount: record.fx.amount, rate: used, source: live ? 'open.er-api.com' : 'fallback', pending: !live, ambiguous: false, estimated: !live };
+    const fx = { currency: code, amount: record.fx.amount, rate: used, source: live ? 'open.er-api.com' : 'fallback', pending: !live, ambiguous: false, estimated: !live, yen: true, ...(record.fx.alternatives ? { alternatives: record.fx.alternatives } : {}) };
     const note = String(record.note || '').replace(/(?:^| · )[A-Z]{3} [\d.]+ @[\d.]+(?: 待確認| 估算(?:匯率)?)*$/, '');
     const label = code + ' ' + fx.amount + ' @' + used + (live ? '' : ' 估算');
     return { ...record, amountCents, fx, note: note ? note + ' · ' + label : label, needsReview: record.category === 'Uncategorized', version: record.version + 1, updatedAt: now || new Date().toISOString(), lastOperationId: operationId || record.lastOperationId || '' };
   }
+  // Records from a bare ¥ stay re-editable (JPY/RMB) after resolution; legacy ambiguous records count too.
+  function isYen(fx) { return !!(fx && (fx.yen === true || fx.ambiguous === true)); }
   // Badges for the transaction list. Old records with only pending/source still map correctly.
   function fxBadges(fx) {
     if (!fx) return [];
@@ -239,8 +241,8 @@
     if (input.fx && !reimbursement) {
       const f = input.fx;
       if (!FX_ALIASES.some(([c]) => c === f.currency && c !== 'HKD') || typeof f.amount !== 'string' || !/^\d{1,7}(\.\d{1,2})?$/.test(f.amount) || !(f.rate > 0)) fail('INVALID_INPUT', '外幣資料不正確');
-      fx = { currency: f.currency, amount: f.amount, rate: f.rate, source: String(f.source || ''), pending: !!(f.pending || f.ambiguous || f.estimated), ambiguous: !!f.ambiguous, estimated: !!f.estimated };
-      if (fx.ambiguous && f.alternatives) fx.alternatives = yenAlternatives({ JPY: f.alternatives.JPY && !f.alternatives.JPY.estimated ? f.alternatives.JPY.rate : null, CNY: f.alternatives.CNY && !f.alternatives.CNY.estimated ? f.alternatives.CNY.rate : null });
+      fx = { currency: f.currency, amount: f.amount, rate: f.rate, source: String(f.source || ''), pending: !!(f.pending || f.ambiguous || f.estimated), ambiguous: !!f.ambiguous, estimated: !!f.estimated, ...(f.yen || f.ambiguous ? { yen: true } : {}) };
+      if (fx.yen && f.alternatives) fx.alternatives = yenAlternatives({ JPY: f.alternatives.JPY && !f.alternatives.JPY.estimated ? f.alternatives.JPY.rate : null, CNY: f.alternatives.CNY && !f.alternatives.CNY.estimated ? f.alternatives.CNY.rate : null });
       if (fx.pending) classification.needsReview = true;
     }
     const key = merchantKey(merchant);
@@ -303,5 +305,5 @@
     return { totalCents, todayCents, count, grossCents, reimbursedCents, byCategory, byDay };
   }
   function inputOf(r) { return { id: r.id, kind: r.kind || 'expense', ...(isReimbursement(r) ? { expenseId: r.expenseId, payer: r.payer } : {}), timestamp: r.timestamp, source: r.source, amount: (r.amountCents / 100).toFixed(2), currency: r.currency, merchant: r.merchant, account: r.account, note: r.note, category: r.category, ...(r.fx ? { fx: r.fx } : {}) }; }
-  return { CATEGORIES, FRIEND_TRANSFER, FALLBACK_HKD_RATE, parseMoney, convertToHkd, fxBadges, yenAlternatives, yenPreview, applyCurrency, YEN_CHOICES, SOURCES, REPAYMENT_SOURCES, isReimbursement, reimbursementSummary, categoryOf, merchantKey, cents, zonedTime, fpsRecipient, matchFpsRecipient, parseFpsNotification, parseHaseCardNotification, classify, prepare, insert, hkDay, totals, inputOf, fail };
+  return { CATEGORIES, FRIEND_TRANSFER, FALLBACK_HKD_RATE, parseMoney, convertToHkd, fxBadges, yenAlternatives, yenPreview, applyCurrency, isYen, YEN_CHOICES, SOURCES, REPAYMENT_SOURCES, isReimbursement, reimbursementSummary, categoryOf, merchantKey, cents, zonedTime, fpsRecipient, matchFpsRecipient, parseFpsNotification, parseHaseCardNotification, classify, prepare, insert, hkDay, totals, inputOf, fail };
 });
