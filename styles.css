@@ -11,3 +11,5 @@
 .fx-choice-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .fx-choice { display: flex; flex-direction: column; align-items: center; font-variant-numeric: tabular-nums; }
 .fx-choice small { font-size: .7rem; font-weight: 500; color: #1d4ed8; }
+.fx-choice { padding: 12px 8px; white-space: nowrap; font-size: 15px; }
+.tx-value .fx-badge + .fx-badge { margin-left: 4px; }
