@@ -264,7 +264,7 @@
     if (sameEvent) return { status: 'duplicate', transaction: sameEvent };
     if (isReimbursement(record)) {
       const expense = rows.find(r => r.id === record.expenseId);
-      if (!expense) fail('EXPENSE_NOT_FOUND', '搵唔到原支出，請先同步並選擇原本嘅支出');
+      if (!expense || expense.deleted) fail('EXPENSE_NOT_FOUND', '搵唔到原支出，請先同步並選擇原本嘅支出');
       if (isReimbursement(expense) || expense.currency !== record.currency) fail('INVALID_EXPENSE', '還款只可連接原本嘅港幣支出');
       if (record.amountCents > reimbursementSummary(rows, expense.id).remainingCents) fail('OVER_REIMBURSEMENT', '累計還款不可超過原支出。請核對其他裝置有冇已記錄呢筆還款');
       record.merchant = expense.merchant; record.merchantKey = expense.merchantKey; record.category = expense.category;
@@ -274,7 +274,7 @@
   function reimbursementSummary(rows, expenseId) {
     const expense = rows.find(r => r.id === expenseId && !isReimbursement(r));
     if (!expense) fail('EXPENSE_NOT_FOUND', '搵唔到原支出');
-    const reimbursedCents = rows.filter(r => isReimbursement(r) && r.expenseId === expenseId).reduce((sum, r) => sum + r.amountCents, 0);
+    const reimbursedCents = rows.filter(r => isReimbursement(r) && !r.deleted && r.expenseId === expenseId).reduce((sum, r) => sum + r.amountCents, 0);
     return { reimbursedCents, remainingCents: expense.amountCents - reimbursedCents };
   }
   function categoryOf(record, rows) {
@@ -290,6 +290,7 @@
     const records = new Map(rows.map(r => [r.id, r]));
     let totalCents = 0, todayCents = 0, count = 0, grossCents = 0, reimbursedCents = 0;
     for (const r of rows) {
+      if (r.deleted) continue;
       if (r.currency !== 'HKD' || !Number.isSafeInteger(r.amountCents)) fail('CORRUPT_RECORD', '交易貨幣或金額不正確');
       const reimbursement = isReimbursement(r), amount = reimbursement ? -r.amountCents : r.amountCents;
       const expense = reimbursement ? records.get(r.expenseId) : r;
@@ -304,6 +305,26 @@
     }
     return { totalCents, todayCents, count, grossCents, reimbursedCents, byCategory, byDay };
   }
+  // Soft delete (tombstone). Deleting an expense also hides its reimbursements (deletedWith),
+  // and restoring it brings exactly those back. Returns the changed records (target first).
+  function setDeleted(rows, id, deleted, now, operationId) {
+    const record = rows.find(r => r.id === id);
+    if (!record) fail('NOT_FOUND', '搵唔到交易');
+    if (typeof deleted !== 'boolean') fail('INVALID_INPUT', 'deleted 必須係布林值');
+    const at = now || new Date().toISOString(), op = operationId || record.lastOperationId || '';
+    const bump = (r, on, extra) => ({ ...r, deleted: on, ...(on ? { deletedAt: at, ...extra } : { deletedAt: '', deletedWith: '' }), version: r.version + 1, updatedAt: at, lastOperationId: op });
+    if (!deleted && isReimbursement(record)) {
+      const expense = rows.find(r => r.id === record.expenseId);
+      if (!expense || expense.deleted) fail('EXPENSE_DELETED', '原支出已刪除，請先還原原支出');
+    }
+    const changed = [];
+    if (!!record.deleted !== deleted) changed.push(bump(record, deleted, {}));
+    if (!isReimbursement(record)) for (const r of rows) if (isReimbursement(r) && r.expenseId === id) {
+      if (deleted && !r.deleted) changed.push(bump(r, true, { deletedWith: id }));
+      if (!deleted && r.deleted && r.deletedWith === id) changed.push(bump(r, false));
+    }
+    return changed;
+  }
   function inputOf(r) { return { id: r.id, kind: r.kind || 'expense', ...(isReimbursement(r) ? { expenseId: r.expenseId, payer: r.payer } : {}), timestamp: r.timestamp, source: r.source, amount: (r.amountCents / 100).toFixed(2), currency: r.currency, merchant: r.merchant, account: r.account, note: r.note, category: r.category, ...(r.fx ? { fx: r.fx } : {}) }; }
-  return { CATEGORIES, FRIEND_TRANSFER, FALLBACK_HKD_RATE, parseMoney, convertToHkd, fxBadges, yenAlternatives, yenPreview, applyCurrency, isYen, YEN_CHOICES, SOURCES, REPAYMENT_SOURCES, isReimbursement, reimbursementSummary, categoryOf, merchantKey, cents, zonedTime, fpsRecipient, matchFpsRecipient, parseFpsNotification, parseHaseCardNotification, classify, prepare, insert, hkDay, totals, inputOf, fail };
+  return { CATEGORIES, FRIEND_TRANSFER, FALLBACK_HKD_RATE, parseMoney, convertToHkd, fxBadges, yenAlternatives, yenPreview, applyCurrency, isYen, YEN_CHOICES, SOURCES, REPAYMENT_SOURCES, isReimbursement, reimbursementSummary, categoryOf, merchantKey, cents, zonedTime, fpsRecipient, matchFpsRecipient, parseFpsNotification, parseHaseCardNotification, classify, prepare, insert, hkDay, totals, setDeleted, inputOf, fail };
 });

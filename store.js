@@ -80,6 +80,14 @@
     if (!currency || category !== r.category || remember) categorize(state, id, category, remember);
     return r;
   }
+  // 刪除／還原：soft delete (tombstone) applied locally at once, then queued for the server.
+  function setDeleted(state, id, deleted = true) {
+    const changed = E.setDeleted(state.transactions, id, deleted, new Date().toISOString(), '');
+    if (!changed.length) return { record: state.transactions.find(t => t.id === id), linked: [] };
+    for (const c of changed) Object.assign(state.transactions.find(t => t.id === c.id), c);
+    state.outbox.push({ action: 'delete', operationId: uid(), id, deleted });
+    return { record: state.transactions.find(t => t.id === id), linked: changed.filter(c => c.id !== id).map(c => c.id) };
+  }
   function rememberRule(state, rule) {
     if (typeof rule.merchantKey !== 'string' || !rule.merchantKey || rule.merchantKey.length > 320 || E.merchantKey(rule.merchantKey) !== rule.merchantKey || !E.CATEGORIES.includes(rule.category)) throw new Error('分類規則格式不正確');
     state.rules = state.rules.filter(r => r.merchantKey !== rule.merchantKey);
@@ -110,9 +118,13 @@
     let version = remote.version;
     for (const next of pending) {
       if (next.action === 'categorize') { next.id = remote.id; next.version = version++; }
+      if (next.action === 'delete') { next.id = remote.id; version++; }
     }
     const latest = pending.filter(x => x.action === 'categorize').at(-1);
     let row = latest ? { ...remote, category: latest.category, needsReview: latest.category === 'Uncategorized', version } : remote;
+    // A still-queued delete/undo stays visible locally until the server confirms it.
+    const pendingDelete = pending.filter(x => x.action === 'delete').at(-1);
+    if (pendingDelete) row = { ...row, deleted: pendingDelete.deleted };
     // Keep a still-queued currency choice visible while earlier operations are acknowledged.
     for (const next of pending) if (next.action === 'fxSetCurrency') {
       next.id = remote.id;
@@ -261,5 +273,5 @@
       throw err;
     } finally { clearTimeout(timeout); }
   }
-  return { initial, uid, read, mutate, add, categorize, fxSetCurrency, saveEdit, rememberRule, rememberFpsRecipient, acknowledge, merge, resolveConflict, discardRejected, restore, sync, send, validEndpoint };
+  return { initial, uid, read, mutate, add, categorize, fxSetCurrency, saveEdit, setDeleted, rememberRule, rememberFpsRecipient, acknowledge, merge, resolveConflict, discardRejected, restore, sync, send, validEndpoint };
 });

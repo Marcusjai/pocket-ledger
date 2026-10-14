@@ -32,9 +32,16 @@ let repaymentDraftEdited = false, pendingRepaymentAmount = null;
 let repaymentSaving = false, repaymentDraftRevision = 0, routeRevision = 0;
 const broadcast = typeof BroadcastChannel !== 'undefined' ? new BroadcastChannel('pocket-ledger') : null;
 function escape(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
-function notify(message, error = false) {
-  $('toast').textContent = message; $('toast').classList.toggle('error', error); $('toast').hidden = false;
-  clearTimeout(toastTimer); toastTimer = setTimeout(() => { $('toast').hidden = true; }, error ? 9000 : 4000);
+// Confirmation text for 刪除; warns when friends' repayments will be hidden too.
+function deletePrompt(r, rows) {
+  const name = E.isReimbursement(r) ? '呢筆朋友還款' : `「${r.merchant || r.note || sources[r.source]}」`;
+  const linked = E.isReimbursement(r) ? [] : rows.filter(t => !t.deleted && E.isReimbursement(t) && t.expenseId === r.id);
+  return `確定刪除${name} $${money(r.amountCents)}？` + (linked.length ? `\n呢筆支出有 ${linked.length} 筆朋友還款，會一齊隱藏；還原時會一齊返嚟。` : '') + '\n刪除後幾秒內可以撳「還原」。';
+}
+function notify(message, error = false, action = null) {
+  $('toast').textContent = message;
+  if (action) { const b = document.createElement('button'); b.type = 'button'; b.className = 'toast-action'; b.textContent = action.label; b.onclick = () => { $('toast').hidden = true; action.run(); }; $('toast').append(' ', b); } $('toast').classList.toggle('error', error); $('toast').hidden = false;
+  clearTimeout(toastTimer); toastTimer = setTimeout(() => { $('toast').hidden = true; }, action ? 8000 : error ? 9000 : 4000);
 }
 function route(view) {
   routeRevision++;
@@ -91,7 +98,7 @@ function setEntryMode(mode) {
 }
 function repaymentBalance() {
   const id = $('reimbursement-expense').value;
-  const expense = state.transactions.find(r => r.id === id && !E.isReimbursement(r));
+  const expense = state.transactions.find(r => r.id === id && !r.deleted && !E.isReimbursement(r));
   $('save-reimbursement').disabled = !expense || repaymentSaving; $('copy-expense-id').disabled = !expense;
   $('reimbursement-expense-id').textContent = expense?.id || '請先選擇原支出';
   if (!expense) { $('reimbursement-balance').textContent = '先記錄原支出。已全數收回嘅支出唔會出現喺選單。'; return; }
@@ -100,7 +107,7 @@ function repaymentBalance() {
 }
 function repaymentOptions() {
   const selected = $('reimbursement-expense').value;
-  const expenses = state.transactions.filter(r => !E.isReimbursement(r) && E.reimbursementSummary(state.transactions, r.id).remainingCents > 0).sort((a, b) => b.timestamp.localeCompare(a.timestamp));
+  const expenses = state.transactions.filter(r => !r.deleted && !E.isReimbursement(r) && E.reimbursementSummary(state.transactions, r.id).remainingCents > 0).sort((a, b) => b.timestamp.localeCompare(a.timestamp));
   $('reimbursement-expense').innerHTML = '<option value="">選擇原本嘅支出（包括之前月份）</option>' + expenses.map(r => `<option value="${escape(r.id)}">${E.hkDay(r.timestamp)} · ${escape(r.merchant || r.note || sources[r.source])} · $${money(r.amountCents)}</option>`).join('');
   if (expenses.some(r => r.id === selected)) $('reimbursement-expense').value = selected;
   repaymentBalance();
@@ -132,10 +139,10 @@ function render() {
   const days = Object.entries(total.byDay).sort((a, b) => b[0].localeCompare(a[0]));
   const max = Math.max(1, ...days.map(([, n]) => Math.abs(n)));
   $('daily').innerHTML = days.length ? '<div class="daily-scroll">' + days.map(([date, n]) => `<div class="daily-row"><span>${date.slice(5).replace('-', '/')}</span><progress class="category-bar${n < 0 ? ' negative' : ''}" max="${max}" value="${Math.abs(n)}" aria-label="${date}淨支出 $${money(n)}"></progress><strong>$${money(n)}</strong></div>`).join('') + '</div>' : empty('今日有咩支出？', '每一日嘅記錄，會慢慢累積喺度。');
-  const rows = state.transactions.filter(r => E.hkDay(r.timestamp).slice(0, 7) === month).sort((a, b) => b.timestamp.localeCompare(a.timestamp));
+  const rows = state.transactions.filter(r => !r.deleted && E.hkDay(r.timestamp).slice(0, 7) === month).sort((a, b) => b.timestamp.localeCompare(a.timestamp));
   $('list-count').textContent = rows.length + ' 筆';
   $('transaction-list').innerHTML = rows.length ? rows.map(row).join('') : empty('未有記錄', '撳「記現金」，幾秒就記低。');
-  const review = state.transactions.filter(r => !E.isReimbursement(r) && r.needsReview).sort((a, b) => b.timestamp.localeCompare(a.timestamp));
+  const review = state.transactions.filter(r => !r.deleted && !E.isReimbursement(r) && r.needsReview).sort((a, b) => b.timestamp.localeCompare(a.timestamp));
   $('review-count').textContent = review.length + ' 筆'; $('review-badge').textContent = review.length; $('review-badge').hidden = !review.length;
   $('review-list').innerHTML = review.length ? '<article class="panel">' + review.map(row).join('') + '</article>' : '<article class="panel">' + empty('全部分好類', '遇到未識嘅商戶，會先放喺呢度。') + '</article>';
   const connected = Boolean(state.settings.endpoint && state.settings.token);
@@ -277,6 +284,18 @@ async function start() {
     try { const r0 = state.transactions.find(t => t.id === editId); const cur = r0 && r0.fx && !r0.fx.ambiguous ? (r0.fx.currency === 'CNY' ? 'RMB' : r0.fx.currency) : null; const choice = fxSelection && fxSelection !== cur ? fxSelection : null; const r = await S.mutate(s => S.saveEdit(s, editId, { category: $('edit-category').value, remember: $('remember').checked, currency: choice })); fxSelection = null; $('category-dialog').close(); await changed(); notify(choice ? `已儲存 · ${choice} · HK$${money(r.amountCents)}` + (r.fx.estimated ? '（估算匯率）' : '') : '已儲存'); synchronize(); }
     catch (err) { notify(err.message, true); }
   };
+  $('delete-record').onclick = async () => {
+    const r = state.transactions.find(t => t.id === editId); if (!r) return;
+    if (!confirm(deletePrompt(r, state.transactions))) return;
+    try {
+      const id = editId, res = await S.mutate(s => S.setDeleted(s, id, true));
+      fxSelection = null; $('category-dialog').close(); await changed();
+      notify('已刪除 $' + money(r.amountCents) + (res.linked.length ? `（連 ${res.linked.length} 筆還款）` : ''), false, { label: '還原', run: async () => {
+        try { await S.mutate(s => S.setDeleted(s, id, false)); await changed(); notify('已還原'); synchronize(); } catch (err) { notify(err.message, true); }
+      } });
+      synchronize();
+    } catch (err) { notify(err.message, true); }
+  };
   $('settings-form').onsubmit = async event => {
     event.preventDefault();
     if (busy) return notify('請等同步完成再修改設定', true);
@@ -310,12 +329,12 @@ async function start() {
   };
   $('export').onclick = async () => {
     const latest = await S.read();
-    download(JSON.stringify({ schema: 2, exportedAt: new Date().toISOString(), transactions: latest.transactions.map(E.inputOf), rules: latest.rules, fpsRecipients: latest.fpsRecipients }, null, 2), 'pocket-ledger-' + E.hkDay(new Date().toISOString()) + '.json', 'application/json'); notify('備份已下載，不包含連接密碼');
+    download(JSON.stringify({ schema: 2, exportedAt: new Date().toISOString(), transactions: latest.transactions.filter(r => !r.deleted).map(E.inputOf), rules: latest.rules, fpsRecipients: latest.fpsRecipients }, null, 2), 'pocket-ledger-' + E.hkDay(new Date().toISOString()) + '.json', 'application/json'); notify('備份已下載，不包含連接密碼');
   };
   $('csv').onclick = async () => {
     const latest = await S.read();
     const cell = v => { let s = String(v ?? ''); if (/^[\s]*[=+\-@]/.test(s)) s = "'" + s; return '"' + s.replace(/"/g, '""') + '"'; };
-    const rows = [['ID', 'Timestamp', 'Source', 'Amount', 'Currency', 'Merchant', 'Category', 'Note', 'Kind', 'ExpenseID', 'Payer', 'OrigCurrency', 'OrigAmount', 'FxRate'], ...latest.transactions.map(r => [r.id, r.timestamp, r.source, (E.isReimbursement(r) ? -1 : 1) * r.amountCents / 100, r.currency, r.merchant, E.categoryOf(r, latest.transactions), r.note, r.kind || 'expense', r.expenseId || '', r.payer || '', r.fx ? r.fx.currency : '', r.fx ? r.fx.amount : '', r.fx ? r.fx.rate : ''])];
+    const rows = [['ID', 'Timestamp', 'Source', 'Amount', 'Currency', 'Merchant', 'Category', 'Note', 'Kind', 'ExpenseID', 'Payer', 'OrigCurrency', 'OrigAmount', 'FxRate'], ...latest.transactions.filter(r => !r.deleted).map(r => [r.id, r.timestamp, r.source, (E.isReimbursement(r) ? -1 : 1) * r.amountCents / 100, r.currency, r.merchant, E.categoryOf(r, latest.transactions), r.note, r.kind || 'expense', r.expenseId || '', r.payer || '', r.fx ? r.fx.currency : '', r.fx ? r.fx.amount : '', r.fx ? r.fx.rate : ''])];
     download('\ufeff' + rows.map(r => r.map(v => typeof v === 'number' ? v.toFixed(2) : cell(v)).join(',')).join('\r\n'), 'pocket-ledger.csv', 'text/csv;charset=utf-8');
   };
   $('import').onchange = async event => {
