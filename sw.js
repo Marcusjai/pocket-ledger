@@ -1,7 +1,7 @@
 // Bump RELEASE for every shell change; never populate an active release's cache.
-const RELEASE = 'fps-fix-2';
+const RELEASE = 'fps-fix-3';
 const CACHE = 'pocket-ledger-shell-' + RELEASE;
-const ASSETS = ['./', './index.html', './styles.css?v=fps-fix-2', './engine.js?v=fps-fix-2', './store.js?v=fps-fix-2', './repayment-link.js?v=fps-fix-2', './app.js?v=fps-fix-2'];
+const ASSETS = ['./', './index.html', './styles.css?v=fps-fix-3', './engine.js?v=fps-fix-3', './store.js?v=fps-fix-3', './repayment-link.js?v=fps-fix-3', './app.js?v=fps-fix-3'];
 async function installShell() {
     try {
           const cache = await caches.open(CACHE);
