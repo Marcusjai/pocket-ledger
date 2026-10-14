@@ -74,7 +74,7 @@
      function parseFpsNotification(input) {
            if (!input || typeof input !== 'object' || Array.isArray(input)) fail('INVALID_INPUT', '銀行通知格式不正確');
            const title = text(input.title, 160, '通知標題').normalize('NFKC').toLowerCase();
-           const body = text(input.body, 2048, '通知內容').normalize('NFKC').replace(/['`]/g, "").replace(/\s+/g, ' ');
+           const body = text(input.body, 2048, '通知內容').normalize('NFKC').replace(/[’`]/g, "'").replace(/\s+/g, ' ');
            if (!/^(?:#?hasesecures?|hang seng(?: personal banking| hk)?)$/i.test(title)) return null;
            let amount, recipient, dateStr, timeStr;
            const matchOut = /^Hang Seng: You've transferred HKD((?:\d{1,7}|\d{1,3}(?:\,\d{3}){1,2})(?:\.\d{1,2})?) to (?:account\s*|\s*Proxy ID) (.*) on (\d{4}-\d{2}-\d{2}) (\d{2}:\d{2})\./.exec(body);
@@ -104,8 +104,8 @@
            const app = text(input.app, 160, 'App 名稱').normalize('NFKC');
            const title = text(input.title, 160, '通知標題').normalize('NFKC');
            if (!/^(?:#?hasesecures?|hang seng(?: personal banking| hk)?)$/i.test(title) && !/hang\s*seng|恒生/i.test(app + ' ' + title)) return null;
-           const body = text(input.body, 2048, '通知內容').normalize('NFKC').replace(/['`]/g, "").replace(/\s+/g, ' ');
-           const match = /^Hang Seng Credit Card:\s*(?:A transaction of|An authorization of|Transaction:)\s*([A-Z]{3}|\$|HKD|RMB|USD|JPY|TWD|NTD|CNY|CN¥|CN￥|NT\$|US\$|U\.S\.\$|TRY|TL|₺|JP\|¥|JP円)\s*([\d,]+(?:\.\d{1,2})?)\s*at\s*(.+?)\s*was made on\s*(\d{4}-\d{2}-\d{2})\s*(\d{2}:\d{2})\./i.exec(body);
+           const body = text(input.body, 2048, '通知內容').normalize('NFKC').replace(/[’`]/g, "'").replace(/\s+/g, ' ');
+           const m = /^Hang Seng Credit Card:\s*You've made a card-not-present transaction of (.{1,32}?)\s+at\s+(.{1,120}?)\s+on\s+(\d{2})\/(\d{2})\/(\d{4})\s+with credit card ending (\d{4})\.(?: .*)?$/i.exec(body); Credit Card:\s*(?:A transaction of|An authorization of|Transaction:)\s*([A-Z]{3}|\$|HKD|RMB|USD|JPY|TWD|NTD|CNY|CN¥|CN￥|NT\$|US\$|U\.S\.\$|TRY|TL|₺|JP\|¥|JP円)\s*([\d,]+(?:\.\d{1,2})?)\s*at\s*(.+?)\s*was made on\s*(\d{4}-\d{2}-\d{2})\s*(\d{2}:\d{2})\./i.exec(body);
            if (!match) return null;
            const rawCurr = match[1].trim();
            const rawAmt = match[2].replace(/,/g, '');
