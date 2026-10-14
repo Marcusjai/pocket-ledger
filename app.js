@@ -27,6 +27,7 @@ function fxChoicesHtml(r, selected) {
 let fxSelection = null;
 function renderFxChoices(r) { $('edit-merchant').textContent = editHeader(r, r.merchant || r.note || sources[r.source], fxSelection); const html = fxChoicesHtml(r, fxSelection); $('fx-choice-row').innerHTML = html; $('fx-choices').hidden = !html; }
 const money = cents => (cents / 100).toLocaleString('en-HK', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+let syncIssue = false, linkId;
 let state, busy = false, editId, toastTimer, entryMode = 'expense';
 let repaymentDraftEdited = false, pendingRepaymentAmount = null;
 let repaymentSaving = false, repaymentDraftRevision = 0, routeRevision = 0;
@@ -98,7 +99,7 @@ function setEntryMode(mode) {
 }
 function repaymentBalance() {
   const id = $('reimbursement-expense').value;
-  const expense = state.transactions.find(r => r.id === id && !r.deleted && !E.isReimbursement(r));
+  const expense = state.transactions.find(r => r.id === id && !r.deleted && E.isExpense(r));
   $('save-reimbursement').disabled = !expense || repaymentSaving; $('copy-expense-id').disabled = !expense;
   $('reimbursement-expense-id').textContent = expense?.id || '請先選擇原支出';
   if (!expense) { $('reimbursement-balance').textContent = '先記錄原支出。已全數收回嘅支出唔會出現喺選單。'; return; }
@@ -107,19 +108,28 @@ function repaymentBalance() {
 }
 function repaymentOptions() {
   const selected = $('reimbursement-expense').value;
-  const expenses = state.transactions.filter(r => !r.deleted && !E.isReimbursement(r) && E.reimbursementSummary(state.transactions, r.id).remainingCents > 0).sort((a, b) => b.timestamp.localeCompare(a.timestamp));
+  const expenses = state.transactions.filter(r => !r.deleted && E.isExpense(r) && E.reimbursementSummary(state.transactions, r.id).remainingCents > 0).sort((a, b) => b.timestamp.localeCompare(a.timestamp));
   $('reimbursement-expense').innerHTML = '<option value="">選擇原本嘅支出（包括之前月份）</option>' + expenses.map(r => `<option value="${escape(r.id)}">${E.hkDay(r.timestamp)} · ${escape(r.merchant || r.note || sources[r.source])} · $${money(r.amountCents)}</option>`).join('');
   if (expenses.some(r => r.id === selected)) $('reimbursement-expense').value = selected;
   repaymentBalance();
 }
+// Text for the top sync bar when the server can't be reached; changes stay queued locally.
+function offlineText(n) { return n ? `暫時連唔到，你啱啱嘅 ${n} 個修改已經保留，連返會自動同步` : '暫時連唔到，連返會自動同步'; }
+function incomeRow(r) {
+  const date = new Date(r.timestamp).toLocaleString('zh-HK', { timeZone: 'Asia/Hong_Kong', month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false });
+  const pending = state.outbox.some(op => (op.transaction?.id || op.id) === r.id);
+  return `<div class="tx-row income-row" data-record="${escape(r.id)}"><span class="tx-icon income" aria-hidden="true">收</span><div class="tx-info"><strong>收款${r.payer ? ' · ' + escape(r.payer) : ''}</strong><p>${escape(date)} · ${sources[r.source] || ''}${pending ? ' · 未同步' : ''}</p><p>唔計入支出。係朋友還錢就對應返原支出。</p></div><div class="tx-value"><strong class="income-amount">+$${money(r.amountCents)} 收款</strong><button data-link-income="${escape(r.id)}">對應支出 ↗</button></div></div>`;
+}
+function linkedText(r, expense) { return `已收還款・對應 ${E.hkDay(expense.timestamp).slice(5).replace('-', '/')} ${expense.merchant || expense.note || sources[expense.source]}`; }
 function row(r) {
+  if (E.isIncome(r)) return incomeRow(r);
   const reimbursement = E.isReimbursement(r), category = E.categoryOf(r, state.transactions);
   const pending = state.outbox.some(op => (op.transaction?.id || op.id) === r.id);
   const date = new Date(r.timestamp).toLocaleString('zh-HK', { timeZone: 'Asia/Hong_Kong', month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false });
   const summary = reimbursement ? null : E.reimbursementSummary(state.transactions, r.id);
   const expense = reimbursement ? state.transactions.find(t => t.id === r.expenseId) : r;
   const title = reimbursement ? '朋友還款' + (r.payer ? ' · ' + r.payer : '') : r.merchant || r.note || sources[r.source];
-  const detail = reimbursement ? `<p>原支出：${escape(expense.merchant || expense.note || sources[expense.source])} · ${E.hkDay(expense.timestamp)}</p>` : summary.reimbursedCents ? `<p>已收回 $${money(summary.reimbursedCents)} · 自付 $${money(summary.remainingCents)}</p>` : '';
+  const detail = reimbursement && r.linkedIncome ? `<p>${escape(linkedText(r, expense))}</p>` : reimbursement ? `<p>原支出：${escape(expense.merchant || expense.note || sources[expense.source])} · ${E.hkDay(expense.timestamp)}</p>` : summary.reimbursedCents ? `<p>已收回 $${money(summary.reimbursedCents)} · 自付 $${money(summary.remainingCents)}</p>` : '';
   const controls = reimbursement ? `<span class="repayment-category">${names[category]} · 扣減支出</span><button data-original="${escape(expense.id)}">查看原支出 ↗</button>` : `<button data-edit="${escape(r.id)}" aria-label="修改 ${escape(title)} 分類">${names[category] || '待分類'} ↗</button>${summary.remainingCents > 0 ? `<button data-reimburse="${escape(r.id)}">記還款 ↗</button>` : '<span class="repayment-category">已全數收回</span>'}`;
   return `<div class="tx-row${reimbursement ? ' repayment-row' : ''}" data-record="${escape(r.id)}"><span class="tx-icon" aria-hidden="true">${reimbursement ? '還' : icons[category] || '·'}</span><div class="tx-info"><strong>${escape(title)}</strong><p>${escape(date)} · ${sources[r.source]}${pending ? ' · 未同步' : ''}</p>${detail}</div><div class="tx-value"><strong>${reimbursement ? '−' : ''}$${money(r.amountCents)}</strong>${r.fx ? `<small class="fx-line">${escape((r.fx.currency === 'CNY' ? 'RMB' : r.fx.currency) + ' ' + r.fx.amount)}</small><span class="fx-badges">${E.fxBadges(r.fx).map(b => `<button type="button" class="fx-badge fx-badge-${b.kind}" data-edit="${escape(r.id)}" aria-label="${b.label}：修改 ${escape(title)}">${b.label}</button>`).join('')}</span>` : ''}${controls}</div></div>`;
 }
@@ -149,10 +159,13 @@ function render() {
   let status = navigator.onLine ? (connected ? '已連接 Google Sheet' : '本機模式 · 記錄只儲存喺呢部裝置') : '離線模式 · 可以繼續記帳';
   if (state.outbox.length && connected) status += ' · ' + state.outbox.length + ' 個操作待同步';
   if (state.lastSync && connected) status += ' · 上次 ' + new Date(state.lastSync).toLocaleTimeString('zh-HK', { hour: '2-digit', minute: '2-digit' });
+  if (syncIssue && connected && !busy) status = offlineText(state.outbox.length);
+  $('retry-sync').hidden = !(syncIssue && connected) || busy;
   if (state.conflict) status = '分類有衝突 · 到設定選擇保留版本';
   if (state.rejection) status = '有還款未能入帳 · 到設定處理';
   $('status').textContent = busy ? '正在同步… 本機仍可記帳' : status;
   $('status').classList.toggle('error', Boolean(state.conflict || state.rejection));
+  $('status').classList.toggle('warn', syncIssue && !state.conflict && !state.rejection);
   $('sync').disabled = busy;
   $('conflict-panel').hidden = !state.conflict;
   if (state.conflict) $('conflict-description').textContent = `${state.conflict.transaction.merchant || '呢筆交易'}：雲端分類係「${names[state.conflict.transaction.category]}」。請揀要保留嘅版本。`;
@@ -173,8 +186,8 @@ async function synchronize(manual = false) {
   if (!state.settings.endpoint || !state.settings.token) { if (manual) { route('settings'); notify('填好連接設定就可以同步'); } return; }
   if (!navigator.onLine) { if (manual) notify('目前離線，記錄已留喺本機'); return; }
   busy = true; render();
-  try { await S.sync({ read: S.read, mutate: S.mutate, send: S.send }); if (manual) notify('同步完成'); }
-  catch (err) { notify(err.message, true); }
+  try { await S.sync({ read: S.read, mutate: S.mutate, send: S.send }); syncIssue = false; if (manual) notify('同步完成'); }
+  catch (err) { if (err.offline) syncIssue = true; else { syncIssue = false; notify(err.message, true); } }
   finally { busy = false; await changed(); }
 }
 function download(content, name, type) {
@@ -216,6 +229,17 @@ async function start() {
   document.querySelectorAll('[data-category]').forEach(b => b.onclick = () => { $('entry-category').value = b.dataset.category; });
   $('month').onchange = render;
   $('sync').onclick = () => synchronize(true);
+  $('retry-sync').onclick = () => synchronize(true);
+  $('link-form').onsubmit = async event => {
+    event.preventDefault();
+    try {
+      const id = linkId, expenseId = $('link-expense').value;
+      if (!expenseId) throw new Error('請揀原本嘅支出');
+      const r = await S.mutate(s => S.linkIncome(s, id, expenseId));
+      $('link-dialog').close(); await changed(); notify('已記為還款 · ' + linkedText(r, state.transactions.find(t => t.id === expenseId))); synchronize();
+    } catch (err) { notify(err.message, true); }
+  };
+  $('close-link').onclick = () => $('link-dialog').close();
   $('entry-form').onsubmit = async event => {
     event.preventDefault(); const button = event.submitter; if (button) button.disabled = true;
     try {
@@ -256,6 +280,16 @@ async function start() {
       const r = state.fpsRecipients.find(x => x.key === fpsEdit.dataset.fpsEdit);
       $('fps-recipient').value = r.recipient; $('fps-match').value = r.match; $('fps-label').value = r.label; $('fps-category').value = r.category; $('fps-enabled').checked = r.enabled;
       $('fps-recipient-form').scrollIntoView({ block: 'start' }); return;
+    }
+    const link = event.target.closest('[data-link-income]');
+    if (link) {
+      linkId = link.dataset.linkIncome; const inc = state.transactions.find(t => t.id === linkId);
+      // FPS expenses first, then newest; only those with enough left to repay.
+      const options = state.transactions.filter(t => !t.deleted && E.isExpense(t) && E.reimbursementSummary(state.transactions, t.id).remainingCents >= inc.amountCents)
+        .sort((a, b) => (b.source === 'FPS') - (a.source === 'FPS') || b.timestamp.localeCompare(a.timestamp));
+      $('link-amount').textContent = `+$${money(inc.amountCents)} 收款${inc.payer ? ' · ' + inc.payer : ''}`;
+      $('link-expense').innerHTML = '<option value="">揀原本嘅支出</option>' + options.map(t => `<option value="${escape(t.id)}">${E.hkDay(t.timestamp)} · ${escape(t.merchant || t.note || sources[t.source])} · $${money(t.amountCents)}${t.source === 'FPS' ? ' · FPS' : ''}</option>`).join('');
+      $('link-dialog').showModal(); return;
     }
     const repay = event.target.closest('[data-reimburse]');
     if (repay) { route('reimburse'); $('reimbursement-expense').value = repay.dataset.reimburse; repaymentBalance(); return; }

@@ -124,12 +124,12 @@ test('review: every precache fetch bypasses a fresh stale HTTP shell and uses th
   assert.equal(env.skips(), 0, 'Installing must not replace an in-use page');
 });
 
-test('review: the production HTML and SW share an exact release marker and visible v1.4.0', () => {
+test('review: the production HTML and SW share an exact release marker and visible v1.5.0', () => {
   const env = environment();
   const markers = [...index.matchAll(/<meta name="pocket-ledger-release" content="([^"]+)">/g)];
   assert.equal(markers.length, 1);
   assert.equal(markers[0][1], env.release);
-  assert.match(index, /Pocket Ledger v1\.4\.0/);
+  assert.match(index, /Pocket Ledger v1\.5\.0/);
   assert.notEqual(env.cache, oldCache);
   assert.notEqual(env.cache, 'pocket-ledger-shell-repayment-prefill-1');
 });

@@ -9,6 +9,9 @@
   const SOURCES = ['Cash', 'ApplePay', 'Octopus', 'FPS', 'HaseCard'];
   const REPAYMENT_SOURCES = ['BankTransfer', 'FPS', 'PayMe', 'Cash'];
   const isReimbursement = r => r.kind === 'reimbursement';
+  // 收款: money received (e.g. Hang Seng incoming FPS). Never spend; can be linked to an expense to become a reimbursement.
+  const isIncome = r => !!r && r.kind === 'income';
+  const isExpense = r => !!r && !isReimbursement(r) && !isIncome(r);
   const FRIEND_TRANSFER = 'FriendTransfer'; // 轉俾朋友
   // Supported foreign currencies. Ambiguous bare ¥ is treated as JPY and flagged 待確認.
   const FX_ALIASES = [
@@ -217,14 +220,14 @@
     const id = text(input.id, 128, 'ID');
     if (!/^[A-Za-z0-9_.:-]{8,128}$/.test(id)) fail('INVALID_ID', '每筆交易需要穩定而獨立嘅 ID（8–128 個字元）');
     const kind = input.kind || 'expense';
-    if (!['expense', 'reimbursement'].includes(kind)) fail('INVALID_KIND', '記錄種類不正確');
-    const reimbursement = kind === 'reimbursement';
+    if (!['expense', 'reimbursement', 'income'].includes(kind)) fail('INVALID_KIND', '記錄種類不正確');
+    const reimbursement = kind === 'reimbursement', income = kind === 'income';
     const expenseId = text(input.expenseId, 128, '原支出 ID');
     if (reimbursement && !/^[A-Za-z0-9_.:-]{8,128}$/.test(expenseId)) fail('INVALID_EXPENSE', '請選擇原本嘅支出');
     if (!reimbursement && expenseId) fail('INVALID_KIND', '還款必須使用 reimbursement 種類');
-    const payer = reimbursement ? text(input.payer, 160, '還款人') : '';
+    const payer = reimbursement || income ? text(input.payer, 160, '還款人') : '';
     const source = input.source || 'Cash';
-    if (!(reimbursement ? REPAYMENT_SOURCES : SOURCES).includes(source)) fail('INVALID_SOURCE', '付款／收款方式不正確');
+    if (!(reimbursement || income ? REPAYMENT_SOURCES : SOURCES).includes(source)) fail('INVALID_SOURCE', '付款／收款方式不正確');
     const currency = text(input.currency || 'HKD', 3, '貨幣').toUpperCase();
     // V1 deliberately refuses FX rather than adding unlike currencies together.
     if (currency !== 'HKD') fail('UNSUPPORTED_CURRENCY', '此版本只記錄 HKD，外幣交易請先核對港幣入帳金額');
@@ -232,13 +235,13 @@
     if (!timestamp && (source !== 'Cash' || reimbursement)) fail('INVALID_TIMESTAMP', '請提供包含時區嘅交易／收款時間');
     timestamp = timestamp || now || new Date().toISOString();
     const canonicalTime = zonedTime(timestamp);
-    const merchant = reimbursement ? '' : text(input.merchant, 160, '商戶').normalize('NFKC').replace(/\s+/g, ' ');
+    const merchant = reimbursement || income ? '' : text(input.merchant, 160, '商戶').normalize('NFKC').replace(/\s+/g, ' ');
     const note = text(input.note, 500, '備註');
     const account = text(input.account, 64, '卡別名');
     const amountCents = cents(input.amount);
-    const classification = reimbursement ? { category: 'Uncategorized', needsReview: false } : classify(merchant, note, source, input.category, rules);
+    const classification = reimbursement ? { category: 'Uncategorized', needsReview: false } : income ? { category: 'Uncategorized', needsReview: true } : classify(merchant, note, source, input.category, rules);
     let fx = null;
-    if (input.fx && !reimbursement) {
+    if (input.fx && !reimbursement && !income) {
       const f = input.fx;
       if (!FX_ALIASES.some(([c]) => c === f.currency && c !== 'HKD') || typeof f.amount !== 'string' || !/^\d{1,7}(\.\d{1,2})?$/.test(f.amount) || !(f.rate > 0)) fail('INVALID_INPUT', '外幣資料不正確');
       fx = { currency: f.currency, amount: f.amount, rate: f.rate, source: String(f.source || ''), pending: !!(f.pending || f.ambiguous || f.estimated), ambiguous: !!f.ambiguous, estimated: !!f.estimated, ...(f.yen || f.ambiguous ? { yen: true } : {}) };
@@ -247,8 +250,8 @@
     }
     const key = merchantKey(merchant);
     // Preserve v1 expense fingerprints so existing IDs and queued retries remain valid.
-    const fingerprint = JSON.stringify(reimbursement ? ['reimbursement', expenseId, source, canonicalTime, amountCents, currency, merchantKey(payer), account] : [source, canonicalTime, amountCents, currency, key, account]);
-    return { id, kind, ...(reimbursement ? { expenseId, payer } : {}), timestamp: canonicalTime, source, amountCents, currency, merchant, merchantKey: key, account, note, ...classification, ...(fx ? { fx } : {}), fingerprint, version: 1, updatedAt: now || new Date().toISOString(), lastOperationId: '' };
+    const fingerprint = JSON.stringify(income ? ['income', source, canonicalTime, amountCents, currency, merchantKey(payer), account] : reimbursement ? ['reimbursement', expenseId, source, canonicalTime, amountCents, currency, merchantKey(payer), account] : [source, canonicalTime, amountCents, currency, key, account]);
+    return { id, kind, ...(reimbursement ? { expenseId, payer } : income ? { payer } : {}), timestamp: canonicalTime, source, amountCents, currency, merchant, merchantKey: key, account, note, ...classification, ...(fx ? { fx } : {}), fingerprint, version: 1, updatedAt: now || new Date().toISOString(), lastOperationId: '' };
   }
   function insert(rows, input, rules, now) {
     if (!input || typeof input !== 'object' || Array.isArray(input)) fail('INVALID_INPUT', '交易格式不正確');
@@ -265,21 +268,21 @@
     if (isReimbursement(record)) {
       const expense = rows.find(r => r.id === record.expenseId);
       if (!expense || expense.deleted) fail('EXPENSE_NOT_FOUND', '搵唔到原支出，請先同步並選擇原本嘅支出');
-      if (isReimbursement(expense) || expense.currency !== record.currency) fail('INVALID_EXPENSE', '還款只可連接原本嘅港幣支出');
+      if (!isExpense(expense) || expense.currency !== record.currency) fail('INVALID_EXPENSE', '還款只可連接原本嘅港幣支出');
       if (record.amountCents > reimbursementSummary(rows, expense.id).remainingCents) fail('OVER_REIMBURSEMENT', '累計還款不可超過原支出。請核對其他裝置有冇已記錄呢筆還款');
       record.merchant = expense.merchant; record.merchantKey = expense.merchantKey; record.category = expense.category;
     }
     return { status: 'inserted', transaction: record };
   }
   function reimbursementSummary(rows, expenseId) {
-    const expense = rows.find(r => r.id === expenseId && !isReimbursement(r));
+    const expense = rows.find(r => r.id === expenseId && isExpense(r));
     if (!expense) fail('EXPENSE_NOT_FOUND', '搵唔到原支出');
     const reimbursedCents = rows.filter(r => isReimbursement(r) && !r.deleted && r.expenseId === expenseId).reduce((sum, r) => sum + r.amountCents, 0);
     return { reimbursedCents, remainingCents: expense.amountCents - reimbursedCents };
   }
   function categoryOf(record, rows) {
     if (!isReimbursement(record)) return record.category;
-    const expense = rows.find(r => r.id === record.expenseId && !isReimbursement(r));
+    const expense = rows.find(r => r.id === record.expenseId && isExpense(r));
     if (!expense) fail('CORRUPT_RECORD', '還款缺少原支出，請檢查備份或同步資料');
     return expense.category;
   }
@@ -290,11 +293,11 @@
     const records = new Map(rows.map(r => [r.id, r]));
     let totalCents = 0, todayCents = 0, count = 0, grossCents = 0, reimbursedCents = 0;
     for (const r of rows) {
-      if (r.deleted) continue;
+      if (r.deleted || isIncome(r)) continue;
       if (r.currency !== 'HKD' || !Number.isSafeInteger(r.amountCents)) fail('CORRUPT_RECORD', '交易貨幣或金額不正確');
       const reimbursement = isReimbursement(r), amount = reimbursement ? -r.amountCents : r.amountCents;
       const expense = reimbursement ? records.get(r.expenseId) : r;
-      if (!expense || isReimbursement(expense)) fail('CORRUPT_RECORD', '還款缺少原支出');
+      if (!expense || !isExpense(expense)) fail('CORRUPT_RECORD', '還款缺少原支出');
       const date = hkDay(r.timestamp);
       if (date === day) todayCents += amount;
       if (date.slice(0, 7) !== month) continue;
@@ -319,12 +322,24 @@
     }
     const changed = [];
     if (!!record.deleted !== deleted) changed.push(bump(record, deleted, {}));
-    if (!isReimbursement(record)) for (const r of rows) if (isReimbursement(r) && r.expenseId === id) {
+    if (isExpense(record)) for (const r of rows) if (isReimbursement(r) && r.expenseId === id) {
       if (deleted && !r.deleted) changed.push(bump(r, true, { deletedWith: id }));
       if (!deleted && r.deleted && r.deletedWith === id) changed.push(bump(r, false));
     }
     return changed;
   }
-  function inputOf(r) { return { id: r.id, kind: r.kind || 'expense', ...(isReimbursement(r) ? { expenseId: r.expenseId, payer: r.payer } : {}), timestamp: r.timestamp, source: r.source, amount: (r.amountCents / 100).toFixed(2), currency: r.currency, merchant: r.merchant, account: r.account, note: r.note, category: r.category, ...(r.fx ? { fx: r.fx } : {}) }; }
-  return { CATEGORIES, FRIEND_TRANSFER, FALLBACK_HKD_RATE, parseMoney, convertToHkd, fxBadges, yenAlternatives, yenPreview, applyCurrency, isYen, YEN_CHOICES, SOURCES, REPAYMENT_SOURCES, isReimbursement, reimbursementSummary, categoryOf, merchantKey, cents, zonedTime, fpsRecipient, matchFpsRecipient, parseFpsNotification, parseHaseCardNotification, classify, prepare, insert, hkDay, totals, setDeleted, inputOf, fail };
+  // Link a 收款 to an expense: it becomes a reimbursement of that expense (same id, version bump).
+  function linkIncome(rows, id, expenseId, now, operationId) {
+    const record = rows.find(r => r.id === id);
+    if (!record || record.deleted) fail('NOT_FOUND', '搵唔到收款');
+    if (!isIncome(record)) fail('INVALID_KIND', '只可以對應收款');
+    const expense = rows.find(r => r.id === expenseId);
+    if (!expense || expense.deleted || !isExpense(expense)) fail('EXPENSE_NOT_FOUND', '搵唔到原支出，請先同步並選擇原本嘅支出');
+    if (expense.currency !== record.currency) fail('INVALID_EXPENSE', '還款只可連接原本嘅港幣支出');
+    if (record.amountCents > reimbursementSummary(rows, expense.id).remainingCents) fail('OVER_REIMBURSEMENT', '收款多過原支出未收回金額');
+    return { ...record, kind: 'reimbursement', expenseId: expense.id, linkedIncome: true, merchant: expense.merchant, merchantKey: expense.merchantKey, category: expense.category, needsReview: false,
+      version: record.version + 1, updatedAt: now || new Date().toISOString(), lastOperationId: operationId || '' };
+  }
+  function inputOf(r) { return { id: r.id, kind: r.kind || 'expense', ...(isReimbursement(r) ? { expenseId: r.expenseId, payer: r.payer } : isIncome(r) ? { payer: r.payer } : {}), timestamp: r.timestamp, source: r.source, amount: (r.amountCents / 100).toFixed(2), currency: r.currency, merchant: r.merchant, account: r.account, note: r.note, category: r.category, ...(r.fx ? { fx: r.fx } : {}) }; }
+  return { CATEGORIES, FRIEND_TRANSFER, FALLBACK_HKD_RATE, parseMoney, convertToHkd, fxBadges, yenAlternatives, yenPreview, applyCurrency, isYen, YEN_CHOICES, SOURCES, REPAYMENT_SOURCES, isReimbursement, isIncome, isExpense, linkIncome, reimbursementSummary, categoryOf, merchantKey, cents, zonedTime, fpsRecipient, matchFpsRecipient, parseFpsNotification, parseHaseCardNotification, classify, prepare, insert, hkDay, totals, setDeleted, inputOf, fail };
 });

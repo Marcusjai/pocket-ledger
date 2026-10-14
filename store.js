@@ -53,6 +53,7 @@
     const r = state.transactions.find(t => t.id === id);
     if (!r) throw new Error('搵唔到交易');
     if (E.isReimbursement(r)) throw new Error('請修改原支出分類；還款會自動跟隨');
+    if (E.isIncome(r)) throw new Error('收款唔使分類；請對應原支出');
     state.outbox.push({ action: 'categorize', operationId: uid(), id, version: r.version, category, remember: Boolean(remember) });
     r.category = category; r.needsReview = category === 'Uncategorized'; r.version++;
     if (remember && r.merchantKey) {
@@ -87,6 +88,13 @@
     for (const c of changed) Object.assign(state.transactions.find(t => t.id === c.id), c);
     state.outbox.push({ action: 'delete', operationId: uid(), id, deleted });
     return { record: state.transactions.find(t => t.id === id), linked: changed.filter(c => c.id !== id).map(c => c.id) };
+  }
+  // 收款 → 已收還款: link an incoming transfer to the expense it repays (applied now, queued for the server).
+  function linkIncome(state, id, expenseId) {
+    const updated = E.linkIncome(state.transactions, id, expenseId, new Date().toISOString(), '');
+    Object.assign(state.transactions.find(t => t.id === id), updated);
+    state.outbox.push({ action: 'linkIncome', operationId: uid(), id, expenseId });
+    return updated;
   }
   function rememberRule(state, rule) {
     if (typeof rule.merchantKey !== 'string' || !rule.merchantKey || rule.merchantKey.length > 320 || E.merchantKey(rule.merchantKey) !== rule.merchantKey || !E.CATEGORIES.includes(rule.category)) throw new Error('分類規則格式不正確');
@@ -203,7 +211,7 @@
       if ((await io.read()).conflict) throw new Error('請先處理分類衝突');
       if ((await io.read()).rejection) throw new Error('有還款未能入帳，請到設定處理');
       const send = async op => {
-        const response = await io.send(config, { ...op, protocolVersion: 2 });
+        const response = await io.send(config, { ...op, protocolVersion: 3 });
         if (!response || typeof response.ok !== 'boolean') throw new Error('伺服器回應不正確，記錄仍保留喺本機');
         return response;
       };
@@ -228,6 +236,8 @@
             } catch (_) { /* The confirmed rejection remains recoverable even if the refresh fails. */ }
           }
           if (op.action === 'reimburse' && code === 'INVALID_ACTION') throw new Error('Google 後端未支援還款。請更新三個 .gs 檔並部署新版本；記錄仍留喺本機');
+          if (op.action === 'linkIncome' && code === 'INVALID_ACTION') throw new Error('Google 後端未支援收款。請部署 v1.5.0；對應仍留喺本機');
+          if (code === 'BUSY') throw Object.assign(new Error('伺服器忙緊'), { offline: true });
           if (op.action === 'fpsRecipient' && code === 'INVALID_ACTION') throw new Error('Google 後端未支援 FPS。請更新三個 .gs 檔並部署 v1.2.0；收款人設定仍留喺本機');
           throw new Error(response.error?.message || '同步失敗，記錄仍留喺本機');
         }
@@ -265,13 +275,14 @@
         method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' },
         body: JSON.stringify({ ...op, token: config.token }), mode: 'cors', credentials: 'omit', redirect: 'follow', cache: 'no-store', signal: controller.signal
       });
-      if (!res.ok) throw new Error('伺服器暫時未能回應');
+      if (!res.ok) throw Object.assign(new Error('伺服器暫時未能回應'), { offline: true });
       return await res.json();
     } catch (err) {
-      if (err.name === 'AbortError') throw new Error('同步逾時。記錄仍保留，重試唔會重複入帳');
-      if (err instanceof SyntaxError || err instanceof TypeError) throw new Error('連線失敗。檢查網絡及部署為「任何人」；本機記錄會保留');
+      // offline: true → the app shows the calm 「暫時連唔到」 bar with 重試 instead of a red toast.
+      if (err.name === 'AbortError') throw Object.assign(new Error('同步逾時。記錄仍保留，重試唔會重複入帳'), { offline: true });
+      if (err instanceof SyntaxError || err instanceof TypeError) throw Object.assign(new Error('連線失敗。檢查網絡及部署為「任何人」；本機記錄會保留'), { offline: true });
       throw err;
     } finally { clearTimeout(timeout); }
   }
-  return { initial, uid, read, mutate, add, categorize, fxSetCurrency, saveEdit, setDeleted, rememberRule, rememberFpsRecipient, acknowledge, merge, resolveConflict, discardRejected, restore, sync, send, validEndpoint };
+  return { initial, uid, read, mutate, add, categorize, fxSetCurrency, saveEdit, setDeleted, linkIncome, rememberRule, rememberFpsRecipient, acknowledge, merge, resolveConflict, discardRejected, restore, sync, send, validEndpoint };
 });
