@@ -78,7 +78,7 @@
            if (!/^(?:#?hasesecures?|hang seng(?: personal banking| hk)?)$/i.test(title)) return null;
            let amount, recipient, dateStr, timeStr;
            const matchOut = /^Hang Seng: You've transferred HKD((?:\d{1,7}|\d{1,3}(?:\,\d{3}){1,2})(?:\.\d{1,2})?) to (?:account\s*|\s*Proxy ID) (.*) on (\d{4}-\d{2}-\d{2}) (\d{2}:\d{2})\./.exec(body);
-           const matchIn = /^Payer (.*) has transferred HKD((?:\d{1,7}|\d{1,3}(?:\,\d{3}){1,2})(?:\.\d{1,2})?) to (?:your account\s*|\s*account\s*|\s*Proxy ID)\s*(.*?) on (\d{4}-\d{2}-\d{2}) (\d{2}:\d{2})\./.exec(body);
+                   const matchIn = /^Payer (.*) has transferred HKD((?:\d{1,7}|\d{1,3}(?:\,\d{3}){1,2})(?:\.\d{1,2})?) to (?:your account\s*|\s*account\s*|\s*Proxy ID)\s*(.*?) on (\d{4}-\d{2}-\d{2})(?:\s+(\d{2}:\d{2}))?/.exec(body);
            if (matchOut) {
                    amount = (cents(matchOut[1].replace(/,/g, '')) / 100).toFixed(2);
                    recipient = matchOut[2].trim();
