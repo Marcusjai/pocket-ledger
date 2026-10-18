@@ -109,9 +109,9 @@ async function harness(fragment = 'dashboard', options = {}) {
   const context = vm.createContext({ document: dom.document, window, location, history,
     navigator: { onLine: true }, URL, Blob, crypto, structuredClone, console,
     setTimeout: () => 1, clearTimeout() {},
-    fetch() { throw new Error('Network forbidden in simulated-DOM tests'); }
+    fetch: options.fetch || (() => { throw new Error('Network forbidden in simulated-DOM tests'); })
   });
-  for (const file of ['engine.js', 'store.js', 'repayment-link.js']) vm.runInContext(fs.readFileSync(path.join(ROOT, file), 'utf8'), context, { filename: file });
+  for (const file of ['engine.js', 'store.js', 'repayment-link.js', ...(options.fetch ? ['fx-rates.js'] : [])]) vm.runInContext(fs.readFileSync(path.join(ROOT, file), 'utf8'), context, { filename: file });
   const S = context.LedgerStore;
   let ledger = structuredClone(S.initial()), writes = 0, nextMutation = null;
   S.read = async () => { if (options.initialRead) await options.initialRead; return structuredClone(ledger); };
@@ -361,4 +361,52 @@ test('refresh keeps existing selected draft and does not replay consumed handoff
   assert.deepEqual(draft(h), { ...blank, expense: EXPENSE, amount: '62' });
   assert.equal(h.el('repayment-link-notice').hidden, true);
   assert.equal(h.writes(), 0);
+});
+
+// Manual foreign-currency expense entry (synthetic rate payload; no real network).
+const ratePayload = { result: 'success', base_code: 'HKD', time_last_update_unix: 1760745600, rates: { HKD: 1, USD: 0.128, JPY: 19.6 } };
+async function fxEntry(h, currency, amount) {
+  h.el('entry-currency').value = currency; h.el('entry-currency').onchange(); await tick();
+  h.el('amount').value = amount;
+  await h.el('entry-form').onsubmit({ preventDefault() {}, submitter: null }); await tick();
+}
+
+test('foreign expense converts at the live rate and keeps the original amount', async () => {
+  const calls = [];
+  const h = await harness('add', { fetch: async url => { calls.push(url); return { ok: true, json: async () => ratePayload }; } });
+  await fxEntry(h, 'USD', '10');
+  const [r] = h.ledger().transactions;
+  assert.equal(r.amountCents, 7813);
+  assert.equal(r.currency, 'HKD');
+  assert.deepEqual([r.fx.currency, r.fx.amount, r.fx.rate, r.fx.estimated, r.fx.source], ['USD', '10.00', 7.8125, false, 'open.er-api.com']);
+  assert.equal(h.ledger().outbox[0].transaction.fx.rate, 7.8125);
+  assert.ok(calls.every(url => url === 'https://open.er-api.com/v6/latest/HKD'));
+  assert.equal(h.el('entry-currency').value, 'USD', 'currency stays selected for the next entry');
+  assert.equal(h.el('amount-currency').textContent, 'USD');
+  assert.equal(h.el('amount').value, '');
+});
+
+test('foreign expense without a live rate uses the estimate and is flagged', async () => {
+  const h = await harness('add', { fetch: async () => { throw new TypeError('offline'); } });
+  await fxEntry(h, 'USD', '10');
+  const [r] = h.ledger().transactions;
+  assert.equal(r.amountCents, 7780);
+  assert.equal(r.fx.estimated, true);
+  assert.equal(r.needsReview, true);
+  assert.match(h.el('fx-preview').textContent, /估算/);
+});
+
+test('yen amounts must be whole numbers; HKD entries never call the rate API', async () => {
+  let fetched = 0;
+  const h = await harness('add', { fetch: async () => { fetched++; return { ok: true, json: async () => ratePayload }; } });
+  await fxEntry(h, 'JPY', '1200.5');
+  assert.equal(h.ledger().transactions.length, 0);
+  await fxEntry(h, 'JPY', '1200');
+  assert.equal(h.ledger().transactions[0].amountCents, 6122);
+  fetched = 0;
+  await fxEntry(h, 'HKD', '45.60');
+  assert.equal(fetched, 0);
+  assert.equal(h.ledger().transactions[1].amountCents, 4560);
+  assert.equal(h.ledger().transactions[1].fx, undefined);
+  assert.equal(h.el('fx-preview').hidden, true);
 });
