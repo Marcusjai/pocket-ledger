@@ -27,6 +27,38 @@ function fxChoicesHtml(r, selected) {
 let fxSelection = null;
 function renderFxChoices(r) { $('edit-merchant').textContent = editHeader(r, r.merchant || r.note || sources[r.source], fxSelection); const html = fxChoicesHtml(r, fxSelection); $('fx-choice-row').innerHTML = html; $('fx-choices').hidden = !html; }
 const money = cents => (cents / 100).toLocaleString('en-HK', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+// Manual foreign-currency entry: the HKD amount follows the live exchange rate at the time of saving.
+const ENTRY_SYMBOL = { HKD: '$', USD: 'US$', JPY: '¥', CNY: '¥', TWD: 'NT$', TRY: '₺' };
+const currencyName = code => code === 'CNY' ? 'RMB' : code;
+let fxPreviewRun = 0;
+function rateStorage() { try { return window.localStorage; } catch (_) { return null; } }
+function entryRate(currency) { return typeof FxRates === 'undefined' ? Promise.resolve({ rate: null }) : FxRates.liveRate(currency, { storage: rateStorage() }); }
+function foreignAmount(currency, raw) {
+  const c = E.cents(String(raw || '').replace(/,/g, '').trim());
+  if (E.FALLBACK_HKD_RATE[currency] == null) throw new Error('暫時唔支援呢種貨幣');
+  if (currency === 'JPY' && c % 100) throw new Error('日圓金額唔可以有小數');
+  return currency === 'JPY' ? String(c / 100) : (c / 100).toFixed(2);
+}
+function rateText(currency, live) {
+  if (!live.rate) return `未能取得即時匯率，暫用估算匯率 1 ${currencyName(currency)} ≈ HK$${E.FALLBACK_HKD_RATE[currency]}；儲存後會標示「估算」。`;
+  const when = live.updated ? new Date(live.updated).toLocaleString('zh-HK', { timeZone: 'Asia/Hong_Kong', month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '';
+  return `即時匯率 1 ${currencyName(currency)} = HK$${live.rate}${when ? `（${when} 更新）` : ''}`;
+}
+async function updateFxEntry() {
+  const currency = $('entry-currency').value, foreign = currency !== 'HKD', run = ++fxPreviewRun;
+  $('amount-currency').textContent = currencyName(currency);
+  $('amount-symbol').textContent = ENTRY_SYMBOL[currency] || currency;
+  const preview = $('fx-preview');
+  if (!foreign) { preview.hidden = true; preview.textContent = ''; return; }
+  preview.hidden = false;
+  if (!preview.textContent) preview.textContent = '正在讀取即時匯率…';
+  const live = await entryRate(currency);
+  if (run !== fxPreviewRun) return;
+  let amountLine = '';
+  try { if ($('amount').value.trim()) amountLine = `≈ HK$${money(E.cents(E.convertToHkd({ currency, amount: foreignAmount(currency, $('amount').value) }, live.rate).amount))} · `; } catch (_) { /* incomplete amount */ }
+  preview.textContent = amountLine + rateText(currency, live);
+  preview.classList.toggle('estimated', !live.rate);
+}
 let state, busy = false, editId, toastTimer, entryMode = 'expense';
 let repaymentDraftEdited = false, pendingRepaymentAmount = null;
 let repaymentSaving = false, repaymentDraftRevision = 0, routeRevision = 0;
@@ -216,13 +248,25 @@ async function start() {
   document.querySelectorAll('[data-category]').forEach(b => b.onclick = () => { $('entry-category').value = b.dataset.category; });
   $('month').onchange = render;
   $('sync').onclick = () => synchronize(true);
+  $('entry-currency').onchange = () => { $('fx-preview').textContent = ''; updateFxEntry(); $('amount').focus(); };
+  $('amount').addEventListener('input', () => { if ($('entry-currency').value !== 'HKD') updateFxEntry(); });
   $('entry-form').onsubmit = async event => {
     event.preventDefault(); const button = event.submitter; if (button) button.disabled = true;
     try {
       const timestamp = $('entry-time').value ? new Date($('entry-time').value + '+08:00').toISOString() : new Date().toISOString();
       const input = { id: S.uid(), timestamp, source: document.querySelector('input[name=source]:checked').value, amount: $('amount').value, merchant: $('merchant').value, note: $('note').value, category: $('entry-category').value };
+      const currency = $('entry-currency').value || 'HKD';
+      let foreignLabel = '';
+      if (currency !== 'HKD') {
+        // Convert at the live rate now; offline or failed lookups use the built-in estimate and are flagged 估算.
+        const original = foreignAmount(currency, input.amount), live = await entryRate(currency);
+        const converted = E.convertToHkd({ currency, amount: original }, live.rate);
+        input.amount = converted.amount; input.fx = converted.fx;
+        foreignLabel = `${currencyName(currency)} ${original} ≈ `;
+      }
       await S.mutate(s => S.add(s, input)); await changed();
-      $('entry-form').reset(); notify('已儲存 $' + money(E.cents(input.amount)) + ' · ' + sources[input.source]); $('amount').focus();
+      $('entry-form').reset(); $('entry-currency').value = currency; updateFxEntry();
+      notify('已儲存 ' + foreignLabel + 'HK$' + money(E.cents(input.amount)) + (input.fx && input.fx.estimated ? '（估算匯率）' : '') + ' · ' + sources[input.source]); $('amount').focus();
       synchronize();
     } catch (err) { notify(err.message, true); } finally { if (button) button.disabled = false; }
   };
