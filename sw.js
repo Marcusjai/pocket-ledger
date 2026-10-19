@@ -1,7 +1,7 @@
 // Bump RELEASE for every shell change; never populate an active release's cache.
-const RELEASE = 'fx-live-1';
+const RELEASE = 'sync-retry-1';
 const CACHE = 'pocket-ledger-shell-' + RELEASE;
-const ASSETS = ['./', './index.html', './styles.css?v=fx-live-1', './engine.js?v=fx-live-1', './store.js?v=fx-live-1', './repayment-link.js?v=repayment-prefill-1', './fx-rates.js?v=fx-live-1', './app.js?v=fx-live-1', './manifest.webmanifest', './icons/icon.svg', './icons/icon-192.png', './icons/icon-512.png'];
+const ASSETS = ['./', './index.html', './styles.css?v=fx-live-1', './engine.js?v=fx-live-1', './store.js?v=sync-retry-1', './repayment-link.js?v=repayment-prefill-1', './fx-rates.js?v=fx-live-1', './app.js?v=fx-live-1', './manifest.webmanifest', './icons/icon.svg', './icons/icon-192.png', './icons/icon-512.png'];
 async function installShell() {
   try {
     const cache = await caches.open(CACHE);
