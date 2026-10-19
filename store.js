@@ -256,22 +256,38 @@
       return url.protocol === 'https:' && url.hostname === 'script.google.com' && /^\/macros\/s\/[A-Za-z0-9_-]+\/exec$/.test(url.pathname) && !url.search && !url.hash && !url.username && !url.password;
     } catch (_) { return false; }
   }
-  async function send(config, op) {
-    if (!validEndpoint(config.endpoint)) throw new Error('請填入 Google Apps Script /exec 網址');
+  // The first request after the app opens or returns to the foreground often fails once:
+  // iOS hands back a dead connection ("Load failed" TypeError) or Apps Script answers a cold
+  // start with an HTML error page (SyntaxError on .json()). Every operation carries an
+  // operationId the backend de-duplicates, so retrying these transient failures is safe.
+  const RETRY_DELAYS_MS = [1500, 3000];
+  const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+  class TransientError extends Error {}
+  async function sendOnce(config, op, fetchImpl) {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 30000);
     try {
-      const res = await fetch(config.endpoint, {
+      const res = await fetchImpl(config.endpoint, {
         method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' },
         body: JSON.stringify({ ...op, token: config.token }), mode: 'cors', credentials: 'omit', redirect: 'follow', cache: 'no-store', signal: controller.signal
       });
-      if (!res.ok) throw new Error('伺服器暫時未能回應');
+      if (!res.ok) throw (res.status >= 500 || res.status === 429 ? new TransientError('伺服器暫時未能回應') : new Error('伺服器暫時未能回應'));
       return await res.json();
     } catch (err) {
       if (err.name === 'AbortError') throw new Error('同步逾時。記錄仍保留，重試唔會重複入帳');
-      if (err instanceof SyntaxError || err instanceof TypeError) throw new Error('連線失敗。檢查網絡及部署為「任何人」；本機記錄會保留');
+      if (err instanceof SyntaxError || err instanceof TypeError) throw new TransientError('連線失敗。檢查網絡及部署為「任何人」；本機記錄會保留');
       throw err;
     } finally { clearTimeout(timeout); }
+  }
+  async function send(config, op, { fetchImpl = (...args) => fetch(...args), wait = sleep } = {}) {
+    if (!validEndpoint(config.endpoint)) throw new Error('請填入 Google Apps Script /exec 網址');
+    for (let attempt = 0; ; attempt++) {
+      try { return await sendOnce(config, op, fetchImpl); }
+      catch (err) {
+        if (!(err instanceof TransientError) || attempt >= RETRY_DELAYS_MS.length) throw err;
+        await wait(RETRY_DELAYS_MS[attempt]);
+      }
+    }
   }
   return { initial, uid, read, mutate, add, categorize, fxSetCurrency, saveEdit, setDeleted, rememberRule, rememberFpsRecipient, acknowledge, merge, resolveConflict, discardRejected, restore, sync, send, validEndpoint };
 });
