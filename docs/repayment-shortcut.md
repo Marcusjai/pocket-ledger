@@ -22,12 +22,14 @@ If you already have an unsaved repayment, the app keeps it and asks whether to *
 
 Keep a private backup of your Shortcut before editing. Do not publish an exported Shortcut containing credentials. Keep the other menu choices and transaction branches as they are.
 
-Use the **Notification Body** input already used by the `received a transfer` check. Select that original notification-body variable explicitly; do not use the notification title, the previous action's number, or text copied from the screen.
+Use the **Notification Body** input already used by the `received a transfer` check.
+
+The Hang Seng Personal Banking app also announces incoming transfers in a second wording, `Payer … has transferred HKD… to your account …`, which does not contain `received a transfer`. Make the check that leads to this menu match both: set the **If** to **Any** of these conditions, Notification Body **contains** `received a transfer`, or Notification Body **contains** `has transferred`. If the automation that receives **Hang Seng HK** app notifications goes straight to **Get Contents of URL**, put this If, with the menu and repayment branch, before the Wait and the POST, and move the POST into **Otherwise**. Without it, the incoming-transfer notification goes to the expense backend, which ignores it, and nothing is recorded. Select that original notification-body variable explicitly; do not use the notification title, the previous action's number, or text copied from the screen.
 
 1. Replace the branch's old URL/open actions with **Match Text** on that Notification Body. Paste the expression below, including `(?i)`, without surrounding slashes.
 
 ```regex
-(?i)^Hang Seng: You['’]ve received a transfer of (?:HKD|HK\$)[ \t]*((?:[1-9][0-9]{0,6}|[1-9][0-9]{0,2},[0-9]{3}|[1-9],[0-9]{3},[0-9]{3})(?:\.[0-9]{1,2})?|0\.(?:0[1-9]|[1-9][0-9]?))(?=[ \t]+from\b)(?![\s\S]*(?:\breceived a transfer\b|(?<![A-Za-z0-9_])(?:HKD|HK\$)))
+(?i)^(?:Hang Seng: You['’]ve received a transfer of|Payer [^\r\n]{1,120}? has transferred) (?:HKD|HK\$)[ \t]*((?:[1-9][0-9]{0,6}|[1-9][0-9]{0,2},[0-9]{3}|[1-9],[0-9]{3},[0-9]{3})(?:\.[0-9]{1,2})?|0\.(?:0[1-9]|[1-9][0-9]?))(?=[ \t]+(?:from|to your account)\b)(?![\s\S]*(?:\breceived a transfer\b|\bhas transferred\b|(?<![A-Za-z0-9_])(?:HKD|HK\$)))
 ```
 
 2. Add **Count**, set to **Items**, using the Match Text result.
@@ -58,7 +60,13 @@ The pattern follows the wording visible in the supplied HASEnotice screenshot. T
 Hang Seng: You've received a transfer of HKD1,234.50 from EXAMPLE to your account XXX-XXX on 2026-01-01.
 ```
 
-It extracts `1,234.50`, specifically after the received-transfer phrase and before `from`. It also accepts `HK$`, a straight or curly apostrophe, whole amounts, and one or two decimal places. It rejects zero, negatives, values above `9,999,999.99`, broken comma grouping, extra decimal places, scientific notation, unsupported currency labels, and multiple received-transfer phrases or HKD/HK$ labels. Leading-zero formats and changed bank wording also fall back to manual entry.
+It extracts `1,234.50`, specifically after the received-transfer phrase and before `from`. The app's other wording, also invented here, works the same way:
+
+```text
+Payer EXAMPLE N*** has transferred HKD1,234.50 to your account XXX-XXX on 2026-01-01. Check out the transfer details.
+```
+
+It extracts `1,234.50` after `has transferred` and before `to your account`. An outgoing `You've transferred …` notification does not match. It also accepts `HK$`, a straight or curly apostrophe, whole amounts, and one or two decimal places. It rejects zero, negatives, values above `9,999,999.99`, broken comma grouping, extra decimal places, scientific notation, unsupported currency labels, and multiple received-transfer phrases or HKD/HK$ labels. Leading-zero formats and changed bank wording also fall back to manual entry.
 
 The exact-one-match check must stay. Never pick the first number or first match when the notification is ambiguous. A balance, account number, date, outgoing transfer, or other notification must not supply the repayment amount. Unexpected formatting should open the bare repayment form so you can enter the amount yourself.
 
@@ -70,7 +78,8 @@ Start each test in a fresh, blank form so a retained draft is not mistaken for a
 
 - The valid example must open the form with `1234.50`; do not save the test
 - Change the amount to `HKD123.456`, `HKD12,34.50`, `HKD-12`, `HKD1e3`, `HKD0`, or `USD12.34`: each must open the manual form with no imported amount
-- Add another `HKD20.00` or a second `received a transfer` phrase: use the manual form
+- Add another `HKD20.00` or a second `received a transfer` or `has transferred` phrase: use the manual form
+- Repeat the valid check with the `Payer EXAMPLE N*** has transferred HKD1,234.50 to your account …` example
 - Confirm the real branch still asks you to choose **Record repayment**, then choose the original expense and tap **儲存還款** only when the details are correct
 
 The regex and URL contract have automated synthetic tests. Execution of these actions on the user's iPhone still needs the check above; a screenshot confirms the wording, not the installed automation or its variable wiring.
@@ -85,4 +94,4 @@ This is amount prefilling only. It does not identify the original expense or det
 
 ## Short version
 
-After the deployed app shows v1.2.2, edit only **Record repayment**: Match Text on Notification Body with the pattern above → Count Items → If exactly 1 → Get Group 1 → URL Encode that number → URL with `#reimburse?amount=` plus the encoded token. Otherwise use the old bare `#reimburse` URL. After End If, Open URLs using If Result. Test without saving, then select the original expense and save manually for real repayments.
+Make the received-transfer If match `received a transfer` **or** `has transferred`, so the Hang Seng app's `Payer … has transferred …` notification reaches the menu. After the deployed app shows v1.2.2, edit **Record repayment**: Match Text on Notification Body with the pattern above → Count Items → If exactly 1 → Get Group 1 → URL Encode that number → URL with `#reimburse?amount=` plus the encoded token. Otherwise use the old bare `#reimburse` URL. After End If, Open URLs using If Result. Test without saving, then select the original expense and save manually for real repayments.

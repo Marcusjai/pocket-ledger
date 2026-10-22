@@ -12,6 +12,7 @@ const pattern = doc.match(/```regex\n([^\n]+)\n```/)[1];
 const regex = new RegExp(pattern.replace(/^\(\?i\)/, ''), 'gi');
 const base = 'https://marcusjai.github.io/pocket-ledger/#reimburse';
 const notification = amount => `Hang Seng: You've received a transfer of ${amount} from EXAMPLE to your account XXX-XXX on 2026-01-01.`;
+const payerNotification = amount => `Payer EXAMPLE N*** has transferred ${amount} to your account XXX-XXX on 2026-01-01. Check out the transfer details.`;
 function shortcutURL(body) {
   const matches = [...body.matchAll(regex)];
   return matches.length === 1 ? base + '?amount=' + encodeURIComponent(matches[0][1]) : base;
@@ -24,14 +25,16 @@ const accepted = [
   ['HKD9,999,999.99', '9999999.99'], ['HKD999,999', '999999.00'],
 ];
 for (const [value, normalized] of accepted) {
-  test(`extract and parse ${value}`, () => {
-    const url = shortcutURL(notification(value));
-    assert.notEqual(url, base);
-    const rawAmount = decodeURIComponent(url.split('?amount=')[1]);
-    assert.match(rawAmount, /^[0-9,.]+$/);
-    assert.equal(link.amount(rawAmount), normalized);
-    assert.deepEqual(link.parse(new URL(url).hash), { view: 'reimburse', amount: normalized });
-  });
+  for (const [wording, make] of [['received', notification], ['payer', payerNotification]]) {
+    test(`extract and parse ${value} (${wording} wording)`, () => {
+      const url = shortcutURL(make(value));
+      assert.notEqual(url, base);
+      const rawAmount = decodeURIComponent(url.split('?amount=')[1]);
+      assert.match(rawAmount, /^[0-9,.]+$/);
+      assert.equal(link.amount(rawAmount), normalized);
+      assert.deepEqual(link.parse(new URL(url).hash), { view: 'reimburse', amount: normalized });
+    });
+  }
 }
 
 const rejected = [
@@ -44,9 +47,11 @@ const rejected = [
 ];
 for (const value of rejected) {
   test(`manual fallback for ${value}`, () => {
-    const url = shortcutURL(notification(value));
-    assert.equal(url, base);
-    assert.deepEqual(link.parse(new URL(url).hash), { view: 'reimburse' });
+    for (const make of [notification, payerNotification]) {
+      const url = shortcutURL(make(value));
+      assert.equal(url, base);
+      assert.deepEqual(link.parse(new URL(url).hash), { view: 'reimburse' });
+    }
   });
 }
 
@@ -65,6 +70,14 @@ const ambiguousOrOther = [
   'Balance HKD100.00. ' + notification('HKD12.34'),
   notification('HKD12.34').replace('from', 'for'),
   notification('HKD12.34').replace('a transfer of', 'a transfer worth'),
+  "You've transferred HKD12.34 to your account XXX-XXX.",
+  'Payer has transferred HKD12.34 to your account XXX-XXX.',
+  payerNotification('HKD12.34') + ' Balance HKD100.00.',
+  payerNotification('HKD12.34') + ' ' + payerNotification('HKD56.78'),
+  payerNotification('HKD12.34') + ' ' + notification('HKD56.78'),
+  'Balance HKD100.00. ' + payerNotification('HKD12.34'),
+  payerNotification('HKD12.34').replace('to your account', 'to account'),
+  'Payer EXAMPLE\nN*** has transferred HKD12.34 to your account XXX-XXX.',
 ];
 for (const [i, body] of ambiguousOrOther.entries()) {
   test(`manual fallback for ambiguous or different notification ${i + 1}`, () => {
@@ -75,6 +88,10 @@ for (const [i, body] of ambiguousOrOther.entries()) {
 test('curly apostrophe and case-insensitive matching', () => {
   const url = shortcutURL(notification('HKD12.34').replace("You've", 'You’ve').toUpperCase());
   assert.deepEqual(link.parse(new URL(url).hash), { view: 'reimburse', amount: '12.34' });
+});
+test('the Hang Seng app incoming-transfer wording with a masked, hyphenated name', () => {
+  const body = 'Payer CHAN-WONG T*** M** has transferred HKD63.00 to your account 123-456XXX-789 on 2026-01-01. Check out the transfer details.';
+  assert.deepEqual(link.parse(new URL(shortcutURL(body)).hash), { view: 'reimburse', amount: '63.00' });
 });
 test('encode only the captured amount and carry no sender or account data', () => {
   assert.equal(shortcutURL(notification('HKD1,234.50')), base + '?amount=1%2C234.50');
